@@ -15,12 +15,12 @@ requirements_utf8.txt
 *$py.class
 
 # ==========================================
-# MIRROR Framework & MetaGPT Outputs
+# Defense Framework & MetaGPT Outputs
 # ==========================================
 
 # MetaGPT Dynamic Workspaces & Internal Cache
 workspace/
-workspace_mirror_*/
+workspace_ee599_*/
 .metagpt/
 
 # Benchmark Evaluation Outputs & Telemetry

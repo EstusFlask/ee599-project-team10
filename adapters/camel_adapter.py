@@ -1,14 +1,14 @@
 import copy
-from .base_adapters import BaseMirrorAdapter
+from .base_adapters import BaseDefenseAdapter
 
-class CamelAdapter(BaseMirrorAdapter):
+class CamelAdapter(BaseDefenseAdapter):
     def __init__(self, engine, adversary, protocols, victim_name, logger=None):
         super().__init__(engine, adversary, protocols, victim_name, logger)
 
     def apply(self, agent):
         """
         Dynamically instruments a CAMEL ChatAgent to route incoming payloads 
-        through the MIRROR BFT engine prior to LLM inference.
+        through the DEFENSE BFT engine prior to LLM inference.
         """
         original_step = agent.step
 
@@ -37,9 +37,9 @@ class CamelAdapter(BaseMirrorAdapter):
                         self.victim_name
                     )
 
-                    if "[MIRROR_BLOCK]" in str(final_decision):
+                    if "[DEFENSE_BLOCK]" in str(final_decision):
                         print(f"\n!!! [SECURITY] Consensus failed: Blocked {sender_name} -> {self.victim_name}")
-                        raise PermissionError("MIRROR BFT Blocked malicious transmission.")
+                        raise PermissionError("DEFENSE BFT Blocked malicious transmission.")
 
                     if final_decision:
                         message_content = final_decision

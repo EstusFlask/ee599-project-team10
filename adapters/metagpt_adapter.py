@@ -14,10 +14,10 @@ from metagpt.roles.engineer import Engineer
 from metagpt.team import Team
 from metagpt.schema import Message
 
-# Core MIRROR imports
-from adapters.base_adapters import BaseMirrorAdapter
+# Core DEFENSE imports
+from adapters.base_adapters import BaseDefenseAdapter
 
-class MetaGPTAdapter(BaseMirrorAdapter):
+class MetaGPTAdapter(BaseDefenseAdapter):
     def __init__(self, engine, adversary, protocols, victim_name, logger=None, config: Dict[str, Any] = None):
         super().__init__(engine, adversary, protocols, victim_name, logger)
         self.target_role_profile = config.get("victim", "Engineer") if config else "Engineer"
@@ -35,7 +35,7 @@ class MetaGPTAdapter(BaseMirrorAdapter):
         print("Resolved MetaGPT LLM:", config.llm.api_type, config.llm.model)
 
         self.run_id = uuid.uuid4().hex[:8]
-        self.unique_workspace = os.path.abspath(f"./workspace_mirror_{self.run_id}")
+        self.unique_workspace = os.path.abspath(f"./workspace_ee599_{self.run_id}")
         config.workspace.path = self.unique_workspace
 
         print(f"\n[MetaGPT Setup] Assembling Software Company Pipeline in {self.unique_workspace}...")
@@ -75,16 +75,16 @@ class MetaGPTAdapter(BaseMirrorAdapter):
                 sender_name = self.victim_name 
                 receiver_name = agent.profile
                 
-                # Route through MIRROR BFT
+                # Route through DEFENSE BFT
                 consensus_text, traitors = self.secure_transmit(
                     message=context_str,
                     sender_name=sender_name,
                     receiver_name=receiver_name
                 )
 
-                if "[MIRROR_BLOCK]" in str(consensus_text):
+                if "[DEFENSE_BLOCK]" in str(consensus_text):
                     print(f"!!! [SECURITY] Consensus failed: Blocked {sender_name} -> {receiver_name}")
-                    return Message(content="[MIRROR_BLOCK: NO_CONSENSUS]", role=agent.profile)
+                    return Message(content="[DEFENSE_BLOCK: NO_CONSENSUS]", role=agent.profile)
 
                 if traitors:
                     print(f"[BLUE TEAM] Byzantine detection: Channels {traitors} rotated to Ghost IDs.")
@@ -92,7 +92,7 @@ class MetaGPTAdapter(BaseMirrorAdapter):
                 is_poisoned = (consensus_text.strip() != context_str.strip())
                 
                 if is_poisoned:
-                    print(f"[MIRROR EXPLOIT] Quorum poisoned! Forcing Agent to execute payload...")
+                    print(f"[DEFENSE EXPLOIT] Quorum poisoned! Forcing Agent to execute payload...")
                     try:
                         task_content = agent.rc.history[-1].content
                     except:
@@ -118,7 +118,7 @@ class MetaGPTAdapter(BaseMirrorAdapter):
                         await original_act(*args, **kwargs)
                         return Message(content=self.captured_llm_output, role=agent.profile)
                     except Exception as e:
-                        print(f"[MIRROR] Framework error handled: {e}. Output preserved.")
+                        print(f"[DEFENSE] Framework error handled: {e}. Output preserved.")
                         return Message(content=self.captured_llm_output, role=agent.profile)
 
             return await original_act(*args, **kwargs)
@@ -142,7 +142,7 @@ class MetaGPTAdapter(BaseMirrorAdapter):
             # Disable archiving to prevent Git SHA corruption
             await self.team.run(n_round=4, auto_archive=False)
         except Exception as e:
-            print(f"[MIRROR] Framework execution handled: {e}")
+            print(f"[DEFENSE] Framework execution handled: {e}")
             pass
         
         final_output = str(self.team.env.history)

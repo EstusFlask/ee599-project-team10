@@ -1,7 +1,7 @@
 # Numerical Adaptive-Defense Experiment
 
 This folder contains a CPU-only numerical experiment. It does not modify the
-original MIRROR implementation.
+communication-layer defense implementation.
 
 ## Files
 
@@ -71,7 +71,7 @@ python expriment/train.py --attacker ibal --budget 1
 
 ## Cost and outcome
 
-MIRROR sends full text on at most two carriers and sends a 64-byte SHA-256 hex
+The defense sends full text on at most two carriers and sends a 64-byte SHA-256 hex
 hash on each remaining witness carrier. For message length `L`:
 
 ```text
@@ -138,7 +138,7 @@ value gives identical communication cost.
 
 The reference length `L_ref=100` is only a simulation default. In the final
 experiment it should be replaced by the median serialized message length from
-the selected dataset. The 64-byte witness length comes from MIRROR's SHA-256
+the selected dataset. The 64-byte witness length comes from the defense's SHA-256
 hex digest implementation. Normal failure cost `1` is the declared base unit,
 not a value copied from another paper.
 

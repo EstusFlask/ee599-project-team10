@@ -1,13 +1,13 @@
 import copy
-from .base_adapters import BaseMirrorAdapter
+from .base_adapters import BaseDefenseAdapter
 
-class AutoGenAdapter(BaseMirrorAdapter):
+class AutoGenAdapter(BaseDefenseAdapter):
     def __init__(self, engine, adversary, protocols, victim_name, logger=None):
         super().__init__(engine, adversary, protocols, victim_name, logger)
 
     def apply(self, agent):
         """
-        Wraps an AutoGen agent's receive function to provide MIRROR protection.
+        Wraps an AutoGen agent's receive function to provide DEFENSE protection.
         Correctly relies on the BFT engine's internal replica generation and 
         properly intercepts dictionary-based message payloads.
         """
@@ -44,9 +44,9 @@ class AutoGenAdapter(BaseMirrorAdapter):
                     self.victim_name
                 )
                 
-                if "[MIRROR_BLOCK]" in str(final_decision):
+                if "[DEFENSE_BLOCK]" in str(final_decision):
                     print(f"\n!!! [SECURITY] Consensus failed: Blocked {sender_name} -> {self.victim_name}")
-                    raise PermissionError("MIRROR BFT Blocked malicious transmission.")
+                    raise PermissionError("DEFENSE BFT Blocked malicious transmission.")
                 
                 if final_decision:
                     if isinstance(message, dict):

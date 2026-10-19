@@ -1,10 +1,10 @@
 import time
 import random
 
-class BaseMirrorAdapter:
+class BaseDefenseAdapter:
     def __init__(self, engine, adversary, protocols, victim_name, logger=None):
         """
-        engine: The MirrorEngine (handles BFT & Ghost Rotation).
+        engine: The DefenseEngine (handles BFT & Ghost Rotation).
         adversary: The Red Team module (LlamaAdversary).
         protocols: List of transport methods (In-Memory, Disk, etc.).
         logger: Records trials for NeurIPS metrics (ASR, QPR).
@@ -19,10 +19,10 @@ class BaseMirrorAdapter:
         self.telemetry = {
             "adapter": self.__class__.__name__,
             "messages": 0,
-            "mirror_tokens": 0,
-            "mirror_time_sec_total": 0.0,
-            "mirror_sender_sec_total": 0.0,
-            "mirror_receiver_sec_total": 0.0,
+            "defense_tokens": 0,
+            "defense_time_sec_total": 0.0,
+            "defense_sender_sec_total": 0.0,
+            "defense_receiver_sec_total": 0.0,
             "end_to_end_sec_total": 0.0,
         }
 
@@ -83,9 +83,9 @@ class BaseMirrorAdapter:
 
         # Telemetry updates
         self.telemetry["messages"] += 1
-        self.telemetry["mirror_sender_sec_total"] += (sender_phase_end - sender_phase_start)
-        self.telemetry["mirror_receiver_sec_total"] += (receiver_phase_end - receiver_phase_start)
-        self.telemetry["mirror_time_sec_total"] += (end_to_end_end - end_to_end_start)
+        self.telemetry["defense_sender_sec_total"] += (sender_phase_end - sender_phase_start)
+        self.telemetry["defense_receiver_sec_total"] += (receiver_phase_end - receiver_phase_start)
+        self.telemetry["defense_time_sec_total"] += (end_to_end_end - end_to_end_start)
         self.telemetry["end_to_end_sec_total"] += (end_to_end_end - end_to_end_start)
 
         if hasattr(self, 'logger') and self.logger:
@@ -98,9 +98,9 @@ class BaseMirrorAdapter:
                 attacked_channels=self.attacked_channels,
                 latency=(end_to_end_end - end_to_end_start),
                 adapter_name=self.__class__.__name__,
-                mirror_time_sec=(end_to_end_end - end_to_end_start),
-                mirror_sender_sec=(sender_phase_end - sender_phase_start),
-                mirror_receiver_sec=(receiver_phase_end - receiver_phase_start),
+                defense_time_sec=(end_to_end_end - end_to_end_start),
+                defense_sender_sec=(sender_phase_end - sender_phase_start),
+                defense_receiver_sec=(receiver_phase_end - receiver_phase_start),
             )
 
         if self.latching:
@@ -119,21 +119,21 @@ class BaseMirrorAdapter:
 
     def get_runtime_stats(self):
         messages = self.telemetry["messages"]
-        total_time = self.telemetry["mirror_time_sec_total"]
+        total_time = self.telemetry["defense_time_sec_total"]
         avg_time = (total_time / messages) if messages else 0.0
-        sender_total = self.telemetry["mirror_sender_sec_total"]
-        receiver_total = self.telemetry["mirror_receiver_sec_total"]
+        sender_total = self.telemetry["defense_sender_sec_total"]
+        receiver_total = self.telemetry["defense_receiver_sec_total"]
         end_to_end_total = self.telemetry["end_to_end_sec_total"]
         end_to_end_avg = (end_to_end_total / messages) if messages else 0.0
 
         return {
             "adapter": self.telemetry["adapter"],
             "messages": messages,
-            "mirror_tokens": self.telemetry["mirror_tokens"],
-            "mirror_time_sec_total": total_time,
-            "mirror_time_sec_avg": avg_time,
-            "mirror_sender_sec_total": sender_total,
-            "mirror_receiver_sec_total": receiver_total,
+            "defense_tokens": self.telemetry["defense_tokens"],
+            "defense_time_sec_total": total_time,
+            "defense_time_sec_avg": avg_time,
+            "defense_sender_sec_total": sender_total,
+            "defense_receiver_sec_total": receiver_total,
             "end_to_end_sec_total": end_to_end_total,
             "end_to_end_sec_avg": end_to_end_avg,
         }

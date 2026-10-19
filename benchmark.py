@@ -7,7 +7,7 @@ import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Core MIRROR imports — also imported per-thread inside _run_one_task
+# Core DEFENSE imports — also imported per-thread inside _run_one_task
 from eval.metrics import Evaluator
 
 # Topologies
@@ -57,20 +57,20 @@ def _format_int_list(values, max_items=12):
     return f"[{head}, ..., {tail}]"
 
 
-def _print_mirror_metrics_table(trials, label):
-    latency = Evaluator.calculate_mirror_latency(trials)
-    tokens = Evaluator.calculate_mirror_tokens(trials)
+def _print_defense_metrics_table(trials, label):
+    latency = Evaluator.calculate_defense_latency(trials)
+    tokens = Evaluator.calculate_defense_tokens(trials)
 
     rows = [
         ("Scope", label),
         ("Protected calls", str(latency["count"])),
-        ("MIRROR tokens total", str(tokens["total_tokens"])),
-        ("MIRROR tokens/call", _format_int_list(tokens["per_call_tokens"])),
-        ("MIRROR latency total (s)", f"{latency['value_total_sec']:.6f}"),
-        ("MIRROR latency avg/call (ms)", f"{latency['value_avg_sec'] * 1000:.3f}"),
+        ("DEFENSE tokens total", str(tokens["total_tokens"])),
+        ("DEFENSE tokens/call", _format_int_list(tokens["per_call_tokens"])),
+        ("DEFENSE latency total (s)", f"{latency['value_total_sec']:.6f}"),
+        ("DEFENSE latency avg/call (ms)", f"{latency['value_avg_sec'] * 1000:.3f}"),
         ("Sender-side total (s)", f"{latency['sender_total_sec']:.6f}"),
         ("Receiver-side total (s)", f"{latency['receiver_total_sec']:.6f}"),
-        ("MIRROR latency/call (s)", _format_float_list(latency["per_call_total_sec"])),
+        ("DEFENSE latency/call (s)", _format_float_list(latency["per_call_total_sec"])),
     ]
 
     key_width = max(len(k) for k, _ in rows)
@@ -163,7 +163,7 @@ def _adjust_workers(kv_pct: float, waiting: int, current: int,
 
 def _run_adaptive(tasks, total_tasks, args, attack_goal, topo_module, judge,
                   judge_lock, judge_total_tokens, initial_attacked,
-                  results, global_trials, last_mirror_stats_ref):
+                  results, global_trials, last_defense_stats_ref):
     """Adaptive execution: submits futures up to a target that self-tunes
     based on vLLM KV cache utilisation polled every 5 seconds.
 
@@ -222,10 +222,10 @@ def _run_adaptive(tasks, total_tasks, args, attack_goal, topo_module, judge,
             # Collect completed futures (non-blocking check)
             done = [f for f in list(active) if f.done()]
             for f in done:
-                result, task_trials, mirror_stats = f.result()
+                result, task_trials, defense_stats = f.result()
                 results.append(result)
                 global_trials.extend(task_trials)
-                last_mirror_stats_ref[0] = mirror_stats
+                last_defense_stats_ref[0] = defense_stats
                 del active[f]
 
             if not done and active:
@@ -242,13 +242,13 @@ def _run_one_task(task, task_idx, total_tasks, args, attack_goal, topo_module, j
     """Run a single benchmark task. Called from worker threads — every stateful
     object is created fresh per-task so threads don't share mutable state."""
     from config import Config
-    from MIRROR_core.MIRROR_engine import MirrorEngine
-    from MIRROR_core.transport import InMemoryTransport, SimulatedNetworkTransport, JsonFileTransport
-    from eval.logger import MirrorLogger
+    from core.engine import DefenseEngine
+    from core.transport import InMemoryTransport, SimulatedNetworkTransport, JsonFileTransport
+    from eval.logger import DefenseLogger
     from agents.adversary import LlamaAdversary
 
-    task_logger = MirrorLogger()
-    task_engine = MirrorEngine(k=args.k, num_text_carriers=args.carriers,
+    task_logger = DefenseLogger()
+    task_engine = DefenseEngine(k=args.k, num_text_carriers=args.carriers,
                                 max_ghost_channels=args.ghosts)
     task_adversary = LlamaAdversary(Config, attack_goal=attack_goal, adapter_name=args.adapter)
 
@@ -299,8 +299,8 @@ def _run_one_task(task, task_idx, total_tasks, args, attack_goal, topo_module, j
             _time.sleep(_delay)
 
         # Fresh stateful objects every attempt
-        task_logger = MirrorLogger()
-        task_engine = MirrorEngine(k=args.k, num_text_carriers=args.carriers,
+        task_logger = DefenseLogger()
+        task_engine = DefenseEngine(k=args.k, num_text_carriers=args.carriers,
                                    max_ghost_channels=args.ghosts)
         task_adversary = LlamaAdversary(Config, attack_goal=attack_goal, adapter_name=args.adapter)
         task_protocols = [InMemoryTransport() for _ in range(args.k)]
@@ -435,12 +435,12 @@ def _run_one_task(task, task_idx, total_tasks, args, attack_goal, topo_module, j
             }
             break
 
-    mirror_stats = task_bridge.get_runtime_stats()
-    return result, task_trials, mirror_stats
+    defense_stats = task_bridge.get_runtime_stats()
+    return result, task_trials, defense_stats
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MIRROR Framework: Resilience Benchmark")
+    parser = argparse.ArgumentParser(description="DEFENSE Framework: Resilience Benchmark")
 
     # Infrastructure
     parser.add_argument("--adapter", type=str, default="autogen",
@@ -448,13 +448,13 @@ def main():
     parser.add_argument("--topo", type=str, default="chain",
                         choices=["chain", "tree", "complete", "random"])
     parser.add_argument("--k", type=int, default=3,
-                        help="Channels (k=1: Baseline, k=3: MIRROR)")
+                        help="Channels (k=1: Baseline, k=3: DEFENSE)")
     parser.add_argument("--num_compromised", type=int, default=1,
                         help="Number of initially compromised channels.")
     parser.add_argument("--carriers", type=int, default=2,
                         help="Full-text carriers.")
     parser.add_argument("--ghosts", type=int, default=1,
-                        help="Max ghost channels (0 = Static MIRROR).")
+                        help="Max ghost channels (0 = Static DEFENSE).")
     parser.add_argument("--scenario", type=str, default="perfect-scenario",
                         choices=["real-world", "perfect-scenario", "network-only", "disk-only"])
     parser.add_argument("--attack_start", type=int, default=0,
@@ -591,7 +591,7 @@ def main():
                          openai_key=Config.JUDGE_OPENAI_KEY,
                          local_url=Config._LOCAL_URL)
 
-    print(f"\n MIRROR RESILIENCE BENCHMARK")
+    print(f"\n DEFENSE RESILIENCE BENCHMARK")
     print(f" Dataset:      {args.dataset.upper()}  ({len(tasks)} tasks)")
     print(f" Attack:       {attack_goal}")
     print(f" Topology:     {args.topo.upper()}  |  Adapter: {args.adapter.upper()}")
@@ -622,13 +622,13 @@ def main():
     judge_lock = threading.Lock()
     initial_attacked = [(args.attack_start + i) % args.k for i in range(num_compromised)]
 
-    # MIRROR recovery requires at least one honest text carrier to serve content.
+    # DEFENSE recovery requires at least one honest text carrier to serve content.
     # If carriers <= num_compromised the adversary can poison ALL text carriers,
     # causing DATA_INTEGRITY_VIOLATION on every message even with honest majority.
     if args.carriers <= num_compromised:
         corrected = num_compromised + 1
-        print(f"\n[MIRROR] WARNING: carriers={args.carriers} <= num_compromised={num_compromised}.")
-        print(f"[MIRROR] Auto-correcting carriers to {corrected} to guarantee recovery.")
+        print(f"\n[DEFENSE] WARNING: carriers={args.carriers} <= num_compromised={num_compromised}.")
+        print(f"[DEFENSE] Auto-correcting carriers to {corrected} to guarantee recovery.")
         args.carriers = corrected
 
     if args.workers == 0:
@@ -639,25 +639,25 @@ def main():
         print(f" Workers:      {args.workers}  (concurrent)")
 
     # ── Task execution ────────────────────────────────────────────────────────
-    last_mirror_stats_ref = [None]
+    last_defense_stats_ref = [None]
 
     if args.workers == 1:
         # Sequential path — preserves original single-thread behaviour exactly
         for i, task in enumerate(tasks):
-            result, task_trials, mirror_stats = _run_one_task(
+            result, task_trials, defense_stats = _run_one_task(
                 task, i, total_tasks, args, attack_goal, topo_module,
                 judge, judge_lock, judge_total_tokens, initial_attacked,
             )
             results.append(result)
             global_trials.extend(task_trials)
-            last_mirror_stats_ref[0] = mirror_stats
+            last_defense_stats_ref[0] = defense_stats
 
     elif args.workers == 0:
         # Adaptive path — self-tunes concurrency based on vLLM /metrics
         _run_adaptive(
             tasks, total_tasks, args, attack_goal, topo_module,
             judge, judge_lock, judge_total_tokens, initial_attacked,
-            results, global_trials, last_mirror_stats_ref,
+            results, global_trials, last_defense_stats_ref,
         )
 
     else:
@@ -676,12 +676,12 @@ def main():
                 for i, task in enumerate(tasks)
             }
             for future in as_completed(futures):
-                result, task_trials, mirror_stats = future.result()
+                result, task_trials, defense_stats = future.result()
                 results.append(result)
                 global_trials.extend(task_trials)
-                last_mirror_stats_ref[0] = mirror_stats
+                last_defense_stats_ref[0] = defense_stats
 
-    last_mirror_stats = last_mirror_stats_ref[0]
+    last_defense_stats = last_defense_stats_ref[0]
 
     # ── Final aggregate report ────────────────────────────────────────────────
     n_total = len(results)
@@ -712,14 +712,14 @@ def main():
     print(f"Avg Quorum Poisoning (QPR):    {qpr_report['display_avg']}")
     print(f"Majority Breaches Prevented:   {qpr_report['breach_count'] == 0}")
 
-    mirror_stats = last_mirror_stats or {}
-    print("MIRROR Overhead Telemetry (Table):")
-    _print_mirror_metrics_table(global_trials, "FINAL")
-    print("MIRROR End-to-End Context:")
-    print(f"  Adapter:                     {mirror_stats.get('adapter', args.adapter)}")
-    print(f"  Protected messages:          {mirror_stats.get('messages', 'N/A')}")
-    print(f"  End-to-end total (s):        {mirror_stats.get('end_to_end_sec_total', 0):.6f}")
-    print(f"  End-to-end avg/msg (s):      {mirror_stats.get('end_to_end_sec_avg', 0):.6f}")
+    defense_stats = last_defense_stats or {}
+    print("DEFENSE Overhead Telemetry (Table):")
+    _print_defense_metrics_table(global_trials, "FINAL")
+    print("DEFENSE End-to-End Context:")
+    print(f"  Adapter:                     {defense_stats.get('adapter', args.adapter)}")
+    print(f"  Protected messages:          {defense_stats.get('messages', 'N/A')}")
+    print(f"  End-to-end total (s):        {defense_stats.get('end_to_end_sec_total', 0):.6f}")
+    print(f"  End-to-end avg/msg (s):      {defense_stats.get('end_to_end_sec_avg', 0):.6f}")
 
     if args.k > 1:
         print(f"Detection Sensitivity (TPR):   "
@@ -741,7 +741,7 @@ def main():
             "asr_percentage": asr_pct,
             "qpr_display_avg": qpr_report.get("display_avg"),
             "majority_breaches_prevented": qpr_report.get("breach_count", 0) == 0,
-            "end_to_end_avg_sec": mirror_stats.get("end_to_end_sec_avg"),
+            "end_to_end_avg_sec": defense_stats.get("end_to_end_sec_avg"),
             "judge_enabled": args.judge,
             "judge_tokens": judge_total_tokens if args.judge else None,
             "asr_no_defense_pct": round(

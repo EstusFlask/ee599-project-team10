@@ -1,7 +1,7 @@
 import hashlib
 from collections import Counter
 
-class MirrorEngine:
+class DefenseEngine:
     def __init__(self, k=3, num_text_carriers=2, max_ghost_channels=1):
         self.k = k
         self.num_text_carriers = num_text_carriers
@@ -29,14 +29,14 @@ class MirrorEngine:
 
     def resolve(self, candidates):
         if self.k == 1:
-            content = candidates[0].get('content', "[MIRROR_ERROR: EMPTY_CHANNEL]")
+            content = candidates[0].get('content', "[DEFENSE_ERROR: EMPTY_CHANNEL]")
             return str(content), []
 
         # ENFORCED MAJORITY VOTING
         votes = [c.get('hash', 'DROPPED') for c in candidates]
         winner_hash, count = Counter(votes).most_common(1)[0]
         
-        # This triggers [MIRROR_BLOCK] if two attackers provide different poisons
+        # This triggers [DEFENSE_BLOCK] if two attackers provide different poisons
         consensus_reached = count > (self.k / 2)
 
         # BYZANTINE AUDIT
@@ -58,10 +58,10 @@ class MirrorEngine:
             for c in candidates:
                 if c.get('type') == 'text' and self._get_hash(c.get('content')) == winner_hash:
                     return str(c['content']), traitors
-            return "[MIRROR_ERROR: DATA_INTEGRITY_VIOLATION]", traitors
+            return "[DEFENSE_ERROR: DATA_INTEGRITY_VIOLATION]", traitors
             
         # If consensus fails, we block. This is the 'Safe State'
-        return "[MIRROR_BLOCK: NO_CONSENSUS]", traitors
+        return "[DEFENSE_BLOCK: NO_CONSENSUS]", traitors
 
     def _rotate_ghost_channels(self, traitors):
         """Replaces compromised channels and drops oldest ghost (FIFO)."""

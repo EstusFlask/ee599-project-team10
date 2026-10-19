@@ -1,11 +1,11 @@
-# MIRROR
+# Reinforcement Learning for Adaptive Defense in Multi-Agent LLM Systems
 
-**Multi-path Inter-agent Redundancy for Robust Orchestration and Resilience**
+**EE599 — Team 10**
 
 Defense against **Adversary-in-the-Middle (AiTM)** attacks on multi-agent systems.
 AiTM threat model based on: https://arxiv.org/abs/2502.14847
 
-MIRROR provides Byzantine-fault-tolerant message passing across **AutoGen**, **CAMEL**, and **MetaGPT** frameworks, with configurable topologies, datasets, and LLM backends.
+The communication-layer defense provides Byzantine-fault-tolerant message passing across **AutoGen**, **CAMEL**, and **MetaGPT** frameworks, with configurable topologies, datasets, and LLM backends.
 
 ---
 
@@ -15,8 +15,8 @@ MIRROR provides Byzantine-fault-tolerant message passing across **AutoGen**, **C
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/highphysicist/aitm-red-teaming-mas
-cd aitm-red-teaming-mas
+git clone https://github.com/EstusFlask/EE599-project.git
+cd EE599-project
 pip install -r requirements.txt
 
 # 2. Start vLLM server (run once per session)
@@ -66,6 +66,15 @@ uv pip install -r requirements-metagpt.txt
 
 ---
 
+## Configuration Names
+
+Project-specific environment variables use the `EE599_` prefix, such as
+`EE599_BACKEND`, `EE599_OLLAMA_URL`, and `EE599_VLLM_MODEL`.
+Defense telemetry and trial logs use `defense_*` fields. MetaGPT task
+workspaces use the `workspace_ee599_*` prefix.
+
+---
+
 ## CLI Reference
 
 ### Core
@@ -77,7 +86,7 @@ uv pip install -r requirements-metagpt.txt
 | `--topo` | `chain` | Topology: `chain`, `tree`, `complete`, `random` |
 | `--backend` | `ollama` | LLM backend: `ollama`, `vllm`, `vertex` |
 
-### MIRROR Parameters
+### Defense Parameters
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -115,7 +124,7 @@ Every run creates a dedicated directory under `results/`:
 results/
   {adapter}_{dataset}_{topo}_k{k}_comp{num_compromised}_{timestamp}/
     results_{run_name}.json      # summary + per-task results
-    run_{run_name}.json          # per-trial MIRROR log (--save_log)
+    run_{run_name}.json          # per-trial defense log (--save_log)
     debug/                       # per-task raw output (--debug)
       debug_{adapter}_{dataset}_{task_id}.json
 ```
@@ -131,7 +140,7 @@ python benchmark.py --adapter autogen --dataset mmlu --topo chain \
   --k 1 --num_compromised 1
 ```
 
-### MIRROR Defense (k=5, α=1)
+### Communication-Layer Defense (k=5, α=1)
 
 ```bash
 python benchmark.py --adapter autogen --dataset mmlu --topo chain \
@@ -165,7 +174,7 @@ config.py             LLM backend configuration
 agents/adversary.py   AiTM adversary (LlamaAdversary)
 adapters/             AutoGen / CAMEL / MetaGPT adapters
 topologies/           chain, tree, complete, random
-MIRROR_core/          BFT engine + transport layer
+core/                 BFT engine + transport layer
 eval/
   metrics.py          ASR / TPR / FPR / QPR evaluators
   judge.py            LLM-as-Judge defense
@@ -194,7 +203,7 @@ results/              Per-run output directories (created at runtime)
 | $\alpha = \frac{c}{k}$ | Fraction of compromised channels | computed internally |
 | $A^{ad}$ | Adversarial agent | `agents/adversary.py` |
 | $A^{vic}$ | Victim agent | Hooked in adapters |
-| $M_{i \to j}$ | Inter-agent message | Intercepted in `MIRROR_core/` |
+| $M_{i \to j}$ | Inter-agent message | Intercepted in `core/` |
 | ASR | Attack Success Rate | `eval/metrics.py` |
 | QPR | Quorum Poisoning Rate | `eval/metrics.py` |
 | TPR / FPR | Detection sensitivity | `eval/metrics.py` |

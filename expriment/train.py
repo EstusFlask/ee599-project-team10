@@ -6,8 +6,8 @@ are configured once at the top of this file. No LLM or text is required.
 
 # All cost/reward settings are defined only here.
 cost = {
-    # MIRROR sends full text on at most two carriers; remaining packets are
-    # SHA-256 hex witnesses (64 bytes). Reference: MIRROR_core/MIRROR_engine.py.
+    # The defense sends full text on at most two carriers; remaining packets are
+    # SHA-256 hex witnesses (64 bytes). Reference: core/engine.py.
     "text_carriers": 2,
     "hash_bytes": 64,
     # Reference extra bytes: k=3 at the reference message length. Its

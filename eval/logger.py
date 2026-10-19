@@ -29,7 +29,7 @@ class AttackLogger:
         self.events.append(event)
         print(f"DEBUG: [Logger] Event logged: {sender} -> {receiver}")
 
-class MirrorLogger(AttackLogger):
+class DefenseLogger(AttackLogger):
     def __init__(self, log_dir="logs"):
         super().__init__(log_dir)
         self.trials = []
@@ -44,19 +44,19 @@ class MirrorLogger(AttackLogger):
         attacked_channels,
         latency,
         adapter_name="",
-        mirror_tokens=0,
-        mirror_time_sec=None,
-        mirror_sender_sec=None,
-        mirror_receiver_sec=None,
+        defense_tokens=0,
+        defense_time_sec=None,
+        defense_sender_sec=None,
+        defense_receiver_sec=None,
     ):
         if attacked_channels is None:
             attacked_channels = []
-        if mirror_time_sec is None:
-            mirror_time_sec = latency
-        if mirror_sender_sec is None:
-            mirror_sender_sec = 0.0
-        if mirror_receiver_sec is None:
-            mirror_receiver_sec = 0.0
+        if defense_time_sec is None:
+            defense_time_sec = latency
+        if defense_sender_sec is None:
+            defense_sender_sec = 0.0
+        if defense_receiver_sec is None:
+            defense_receiver_sec = 0.0
 
         trial = {
             "timestamp": datetime.now().isoformat(),
@@ -68,19 +68,19 @@ class MirrorLogger(AttackLogger):
             "attacked_channels": list(attacked_channels),
             "latency": latency,
             "adapter": adapter_name,
-            "mirror_tokens": mirror_tokens,
-            "mirror_time_sec": mirror_time_sec,
-            "mirror_sender_sec": mirror_sender_sec,
-            "mirror_receiver_sec": mirror_receiver_sec,
+            "defense_tokens": defense_tokens,
+            "defense_time_sec": defense_time_sec,
+            "defense_sender_sec": defense_sender_sec,
+            "defense_receiver_sec": defense_receiver_sec,
         }
         self.trials.append(trial)
 
-        self.log_event(sender, receiver, original_msg, final_msg, plan="MIRROR_PROTECTED")
+        self.log_event(sender, receiver, original_msg, final_msg, plan="DEFENSE_PROTECTED")
 
     def save(self, filename=None):
         if not filename:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = os.path.join(self.log_dir, f"mirror_run_{ts}.json")
+            filename = os.path.join(self.log_dir, f"defense_run_{ts}.json")
         with open(filename, "w") as f:
             json.dump({"trials": self.trials, "events": self.events}, f, indent=2)
         print(f"[Logger] Trials saved → {filename}")
