@@ -36,3 +36,4 @@ adapters/__pycache__/metagpt_adapter.cpython-311.pyc
 .mcp.json
 key.json
 debug/
+experiment/ignore

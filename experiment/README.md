@@ -1,7 +1,34 @@
 # Numerical Adaptive-Defense Experiment
 
-This folder contains a CPU-only numerical experiment. It does not modify the
-communication-layer defense implementation.
+This folder contains numerical experiments that do not modify the
+communication-layer defense implementation. The files listed immediately below
+are the earlier CPU-only experiment; the newer multi-algorithm POMDP work is
+under `rl/`.
+
+## New RL experiment
+
+The dedicated `ee599-rl` environment and `experiment/rl/` package compare
+PPO, A2C, DQN, QR-DQN, and RecurrentPPO against all 12 fixed action choices
+plus rule policies. See `rl/README.md` for reproduction commands and
+`RL_EXPERIMENT_REPORT.md` for the current results and limitations.
+
+## Milestone numerical experiment
+
+The milestone experiment compares the original fixed, stateless-ML, stateful-ML,
+and linear Q-learning controllers under one attacker and three staggered attackers
+at matched average communication cost.
+
+Reproduce the numerical experiments and figures from the repository root:
+
+```powershell
+conda run -n ee599-rl --no-capture-output python -m experiment.run_milestone_experiments
+conda run -n ee599-rl --no-capture-output python -m experiment.plot_milestone_results
+```
+
+The runner uses the complete Git history to verify equivalence to the original
+four-controller implementation at commit `b9dafc0`. Raw results and execution
+metadata are saved under `experiment/results/milestone_b9dafc0/`, which remains
+Git-ignored. Generated figures are saved locally under `experiment/ignore/mid/`.
 
 ## Files
 
@@ -14,17 +41,17 @@ communication-layer defense implementation.
 ## Run
 
 ```bash
-python expriment/train.py --attacker hmm --profile bursty \
+python experiment/train.py --attacker hmm --profile bursty \
   --budget 1
 ```
 
 Single stochastic attacker, three seeds, and a same-cost comparison:
 
 ```bash
-conda run -n CVPR python expriment/run_single_attacker.py
+conda run -n CVPR python experiment/run_single_attacker.py
 ```
 
-Outputs are written to `expriment/results/single_attacker/`. The left plot is
+Outputs are written to `experiment/results/single_attacker/`. The left plot is
 the success-cost curve; the right plot compares all models at exactly the same
 interpolated average communication cost. Timing includes supervised data plus
 all three trainable models in `training_seconds`, and all four policy
@@ -35,10 +62,10 @@ episode. Start times receive deterministic random jitter in every episode, so
 the test schedule is not copied from training:
 
 ```bash
-conda run -n CVPR python expriment/run_single_attacker.py \
+conda run -n CVPR python experiment/run_single_attacker.py \
   --attackers 3 --steps 180 --window 30 \
   --train-episodes 1000 --test-episodes 10 \
-  --output-dir expriment/results/multi_attacker
+  --output-dir experiment/results/multi_attacker
 ```
 
 The stateful ML and RL models receive the same 12 observable features:
@@ -66,7 +93,7 @@ dictionaries at the top of `train.py`.
 IBAL adaptive schedule:
 
 ```bash
-python expriment/train.py --attacker ibal --budget 1
+python experiment/train.py --attacker ibal --budget 1
 ```
 
 ## Cost and outcome
