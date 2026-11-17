@@ -37,3 +37,4 @@ adapters/__pycache__/metagpt_adapter.cpython-311.pyc
 key.json
 debug/
 experiment/ignore
+experiment/docs

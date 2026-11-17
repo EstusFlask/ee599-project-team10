@@ -14,6 +14,7 @@ from sb3_contrib import MaskablePPO, QRDQN, RecurrentPPO, TRPO
 
 from .baselines import ConservativePolicy, FixedPolicy, RiskHeuristicPolicy
 from .environment import DefenseEnv, RECOVERIES, REDUNDANCIES, SCENARIOS
+from .config import ENVIRONMENT_VERSION, continuous_changes
 from .legacy_q import LegacyLinearQPolicy
 
 
@@ -58,8 +59,14 @@ def load_policies(model_dir: Path, seed: int, algorithms: list[str]):
 def run_episode(
     policy, scenario, budget_scale: float, seed: int, recurrent: bool,
     maskable: bool = False,
+    continuous: bool = False,
+    trace: list[dict] | None = None,
 ):
-    env = DefenseEnv(scenario, budget_scale=budget_scale)
+    config = SCENARIOS[scenario] if isinstance(scenario, str) else scenario
+    env = DefenseEnv(
+        config, budget_scale=budget_scale,
+        changes=continuous_changes(config) if continuous else (),
+    )
     obs, _ = env.reset(seed=seed)
     if hasattr(policy, "reset"):
         policy.reset(env)
@@ -83,9 +90,21 @@ def run_episode(
         action_counts[action] += 1
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
+        if trace is not None:
+            trace.append({
+                "round": env.t - 1, "scenario": config.name,
+                "budget_scale": budget_scale, "seed": seed,
+                "attacker_count": info["attacker_count"],
+                "success": int(info["success"]), "importance": info["importance"],
+                "cost": info["cost"], "redundancy": info["redundancy"],
+                "recovery": info["recovery"],
+                "recovery_used": int(info["recovery_used"]),
+                "budget_remaining": info["budget_remaining"],
+            })
         if terminated or truncated:
             break
     metrics = info["episode_metrics"]
+    env.close()
     return {
         "policy": "",
         "scenario": scenario if isinstance(scenario, str) else scenario.name,
@@ -95,6 +114,7 @@ def run_episode(
         "success_rate": metrics["success_rate"],
         "weighted_success_rate": metrics["weighted_success_rate"],
         "mean_cost": metrics["mean_cost"],
+        "target_mean_cost": metrics["target_mean_cost"],
         "recovery_rate": metrics["recovery_uses"] / env.config.horizon,
         "rotation_rate": metrics["rotations"] / env.config.horizon,
         "budget_violation_rate": metrics["budget_violations"] / env.config.horizon,
@@ -110,7 +130,7 @@ def summarize(rows):
         groups[(row["policy"], row["scenario"], row["budget_scale"])].append(row)
     summary = []
     metrics = (
-        "return", "success_rate", "weighted_success_rate", "mean_cost",
+        "return", "success_rate", "weighted_success_rate", "mean_cost", "target_mean_cost",
         "recovery_rate", "rotation_rate", "budget_violation_rate", "mean_redundancy",
     )
     for (policy, scenario, budget), values in sorted(groups.items()):
@@ -141,30 +161,44 @@ def main():
     parser.add_argument("--scenarios", nargs="+", choices=SCENARIOS, default=[s for s in SCENARIOS if s != "train_mix"])
     parser.add_argument("--budgets", nargs="+", type=float, default=[0.70, 1.0, 1.30])
     parser.add_argument("--seeds", nargs="+", type=int, default=[101, 202, 303, 404, 505])
+    parser.add_argument("--continuous", action="store_true",
+                        help="Change attacker count, budget, and detector noise within each episode.")
+    parser.add_argument("--save-traces", action="store_true",
+                        help="Also save per-round actions and costs for adaptation analysis.")
     args = parser.parse_args()
+    if args.continuous:
+        args.output = args.output / "continuous"
     policies = load_policies(args.model_dir, args.training_seed, args.algorithms)
     rows = []
+    traces = []
     total = len(policies) * len(args.scenarios) * len(args.budgets) * len(args.seeds)
     done = 0
     for policy_name, policy in policies.items():
         for scenario in args.scenarios:
             for budget in args.budgets:
                 for seed in args.seeds:
+                    trace = [] if args.save_traces else None
                     row = run_episode(
                         policy, scenario, budget, seed,
                         recurrent=policy_name == "recurrent_ppo",
                         maskable=policy_name == "maskable_ppo",
+                        continuous=args.continuous, trace=trace,
                     )
                     row["policy"] = policy_name
                     rows.append(row)
+                    if trace is not None:
+                        traces.extend({"policy": policy_name, **step} for step in trace)
                     done += 1
         print(f"evaluated {policy_name} ({done}/{total})", flush=True)
     summary = summarize(rows)
     args.output.mkdir(parents=True, exist_ok=True)
     write_csv(args.output / "episodes.csv", rows)
     write_csv(args.output / "summary.csv", summary)
+    if traces:
+        write_csv(args.output / "traces.csv", traces)
     (args.output / "evaluation_config.json").write_text(
-        json.dumps(vars(args), default=str, indent=2), encoding="utf-8"
+        json.dumps({**vars(args), "environment_version": ENVIRONMENT_VERSION},
+                   default=str, indent=2), encoding="utf-8"
     )
     ranked = sorted(
         summary,

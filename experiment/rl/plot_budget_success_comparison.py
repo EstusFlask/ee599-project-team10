@@ -51,6 +51,17 @@ def _retry_success_probability(env: DefenseEnv, quorum: int, rotate: bool) -> fl
     attacks = env.true_attacks
     probability = 0.0
     if rotate:
+        if env.config.attacker_count > 1:
+            # Rotation/background operate on channel masks, so a channel
+            # repaired and immediately attacked again is counted only once.
+            attacked_p = 1.0 - env.config.rotate_clear_probability * (1.0 - 0.035)
+            clean = env.config.max_attack - attacks
+            for survivors in range(attacks + 1):
+                ps = _binomial_probability(attacks, attacked_p, survivors)
+                for background in range(clean + 1):
+                    if survivors + background <= quorum:
+                        probability += ps * _binomial_probability(clean, 0.035, background)
+            return probability
         survivor_p = 1.0 - env.config.rotate_clear_probability
         for survivors in range(attacks + 1):
             ps = _binomial_probability(attacks, survivor_p, survivors)
@@ -89,14 +100,21 @@ def oracle_action(env: DefenseEnv) -> int:
             success_probability = _retry_success_probability(
                 env, quorum, rotate=recovery == "rotate"
             )
-            cost += base_cost + (0.22 if recovery == "rotate" else 0.0)
+            cost += base_cost + (env.reward_config.rotation_cost if recovery == "rotate" else 0.0)
         utility = env.importance * (
-            success_probability - 1.65 * (1.0 - success_probability)
+            success_probability - env.failure_penalty * (1.0 - success_probability)
         )
-        score = utility - 0.20 * cost
-        score -= env.constraint_weight * max(0.0, cost - reserve)
+        score = utility - env.reward_config.communication_weight * cost
+        if env.budget_penalty_mode == "lagrangian":
+            target = env.config.budget_per_step * env.budget_scale
+            score -= env.constraint_weight * (cost - target)
+        else:
+            score -= env.constraint_weight * max(0.0, cost - reserve)
         if env.budget_remaining - cost < 0:
-            score -= 0.35 + min(1.5, (cost - env.budget_remaining) * 0.05)
+            score -= env.reward_config.budget_violation_base + min(
+                env.reward_config.budget_debt_cap,
+                (cost - env.budget_remaining) * env.reward_config.budget_debt_weight,
+            )
         scores.append(score)
     return int(np.argmax(scores))
 

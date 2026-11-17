@@ -7,7 +7,7 @@ channel persistence, and exact number of compromised replicas remain hidden.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
 import gymnasium as gym
@@ -15,80 +15,11 @@ import numpy as np
 from gymnasium import spaces
 
 
-REDUNDANCIES = (1, 3, 5, 7)
-RECOVERIES = ("none", "retry", "rotate")
-
-
-@dataclass(frozen=True)
-class ScenarioConfig:
-    name: str = "train_mix"
-    horizon: int = 256
-    budget_per_step: float = 0.72
-    max_attack: int = 5
-    detector_false_positive: float = 0.08
-    detector_false_negative: float = 0.18
-    persistence: float = 0.72
-    rotate_clear_probability: float = 0.72
-    adaptive_strength: float = 0.35
-    regime_switch_probability: float = 0.0
-    length_shift: float = 0.0
-    importance_shift: float = 0.0
-    # Number of independent attacker processes.  One preserves the original
-    # aggregate-count simulator exactly; values >1 maintain an independent
-    # hidden regime per attacker and union their compromised-replica masks.
-    attacker_count: int = 1
-
-
-SCENARIOS: dict[str, ScenarioConfig] = {
-    "train_mix": ScenarioConfig(),
-    "mild": ScenarioConfig(
-        name="mild", persistence=0.45, adaptive_strength=0.05,
-        detector_false_negative=0.10, budget_per_step=0.55,
-    ),
-    "bursty": ScenarioConfig(
-        name="bursty", persistence=0.60, adaptive_strength=0.15,
-        budget_per_step=0.68,
-    ),
-    "persistent": ScenarioConfig(
-        name="persistent", persistence=0.92, adaptive_strength=0.25,
-        detector_false_negative=0.25, budget_per_step=0.78,
-    ),
-    "adaptive": ScenarioConfig(
-        name="adaptive", persistence=0.80, adaptive_strength=0.80,
-        detector_false_negative=0.25, regime_switch_probability=0.035,
-        budget_per_step=0.82,
-    ),
-    "multi": ScenarioConfig(
-        name="multi", persistence=0.78, max_attack=5,
-        adaptive_strength=0.48, budget_per_step=0.92,
-        importance_shift=0.08,
-    ),
-    "noisy_ood": ScenarioConfig(
-        name="noisy_ood", persistence=0.82,
-        detector_false_positive=0.28, detector_false_negative=0.42,
-        adaptive_strength=0.55, regime_switch_probability=0.06,
-        length_shift=0.20, budget_per_step=0.78,
-    ),
-    "budget_shock": ScenarioConfig(
-        name="budget_shock", persistence=0.78, adaptive_strength=0.45,
-        budget_per_step=0.50, regime_switch_probability=0.025,
-    ),
-    "multi_attacker_2": ScenarioConfig(
-        name="multi_attacker_2", attacker_count=2, persistence=0.78,
-        adaptive_strength=0.48, detector_false_negative=0.25,
-        regime_switch_probability=0.025, budget_per_step=0.82,
-    ),
-    "multi_attacker_3": ScenarioConfig(
-        name="multi_attacker_3", attacker_count=3, persistence=0.82,
-        adaptive_strength=0.55, detector_false_negative=0.30,
-        regime_switch_probability=0.035, budget_per_step=0.82,
-    ),
-    "multi_attacker_5": ScenarioConfig(
-        name="multi_attacker_5", attacker_count=5, persistence=0.86,
-        adaptive_strength=0.65, detector_false_negative=0.35,
-        regime_switch_probability=0.045, budget_per_step=0.82,
-    ),
-}
+# Re-export these names so existing experiment scripts keep their imports.
+from .config import (
+    DEFAULT_REWARD, RECOVERIES, REDUNDANCIES, SCENARIOS,
+    RewardConfig, ScenarioChange, ScenarioConfig,
+)
 
 
 class DefenseEnv(gym.Env):
@@ -111,7 +42,10 @@ class DefenseEnv(gym.Env):
         randomization_profile: str = "standard",
         constraint_weight: float = 0.0,
         attacker_count_probabilities: tuple[float, ...] | None = None,
-        failure_penalty: float = 1.65,
+        failure_penalty: float | None = None,
+        reward_config: RewardConfig = DEFAULT_REWARD,
+        budget_penalty_mode: str = "reserve",
+        changes: tuple[ScenarioChange, ...] = (),
     ) -> None:
         super().__init__()
         if isinstance(scenario, str):
@@ -132,11 +66,18 @@ class DefenseEnv(gym.Env):
             )
         if constraint_weight < 0:
             raise ValueError("constraint_weight must be non-negative")
+        if failure_penalty is None:
+            failure_penalty = reward_config.failure_penalty
         if failure_penalty <= 0:
             raise ValueError("failure_penalty must be positive")
+        if budget_penalty_mode not in {"reserve", "lagrangian"}:
+            raise ValueError("budget_penalty_mode must be 'reserve' or 'lagrangian'")
         self.randomization_profile = randomization_profile
         self.constraint_weight = float(constraint_weight)
         self.failure_penalty = float(failure_penalty)
+        self.reward_config = reward_config
+        self.budget_penalty_mode = budget_penalty_mode
+        self.changes = tuple(sorted(changes, key=lambda change: change.round))
         if attacker_count_probabilities is not None:
             probabilities = np.asarray(attacker_count_probabilities, dtype=np.float64)
             if probabilities.shape != (5,) or np.any(probabilities < 0) or probabilities.sum() <= 0:
@@ -224,6 +165,7 @@ class DefenseEnv(gym.Env):
         if options and "budget_scale" in options:
             self.budget_scale = float(options["budget_scale"])
         self.t = 0
+        self._next_change = 0
         self.budget_total = (
             self.config.horizon * self.config.budget_per_step * self.budget_scale
         )
@@ -256,6 +198,47 @@ class DefenseEnv(gym.Env):
         }
         self._sample_context()
         return self._observation(), {"scenario": self.config.name}
+
+    def set_constraint_weight(self, weight: float) -> None:
+        """Small public hook for the training-only adaptive budget callback."""
+        if not np.isfinite(weight) or weight < 0:
+            raise ValueError("constraint weight must be finite and non-negative")
+        self.constraint_weight = float(weight)
+
+    def _apply_changes(self) -> None:
+        while self._next_change < len(self.changes):
+            change = self.changes[self._next_change]
+            if change.round > self.t:
+                break
+            updates = {}
+            if change.attacker_count is not None:
+                count = change.attacker_count
+                old_count = len(self.attacker_regimes)
+                if count > old_count:
+                    added = self.np_random.choice(
+                        3, size=count - old_count, p=(0.70, 0.25, 0.05)
+                    )
+                    self.attacker_regimes = np.concatenate((self.attacker_regimes, added)).astype(np.int8)
+                else:
+                    self.attacker_regimes = self.attacker_regimes[:count]
+                if old_count == 1 and count > 1:
+                    # The one-attacker process stores a count, not identities.
+                    self.compromised_mask[:] = False
+                    self.compromised_mask[:self.compromised] = True
+                updates["attacker_count"] = count
+            if change.budget_per_step is not None:
+                # Reprice only the remaining rounds; preserve money already spent.
+                delta = (
+                    (change.budget_per_step - self.config.budget_per_step)
+                    * self.budget_scale * (self.config.horizon - self.t)
+                )
+                self.budget_total += delta
+                self.budget_remaining += delta
+                updates["budget_per_step"] = change.budget_per_step
+            if change.detector_false_negative is not None:
+                updates["detector_false_negative"] = change.detector_false_negative
+            self.config = replace(self.config, **updates)
+            self._next_change += 1
 
     def _transition_regime(self) -> None:
         transitions = np.asarray(
@@ -313,6 +296,7 @@ class DefenseEnv(gym.Env):
         return self.compromised
 
     def _sample_context(self) -> None:
+        self._apply_changes()
         self._transition_regime()
         length_transition = np.asarray(
             ((0.76, 0.21, 0.03), (0.16, 0.69, 0.15), (0.04, 0.21, 0.75))
@@ -365,7 +349,7 @@ class DefenseEnv(gym.Env):
             if recovery != "none":
                 expected += failure_proxy * base
             if recovery == "rotate":
-                expected += failure_proxy * 0.22
+                expected += failure_proxy * self.reward_config.rotation_cost
             masks[action] = expected <= cap
         masks[self.encode_action(1, "none")] = True
         return masks
@@ -376,11 +360,22 @@ class DefenseEnv(gym.Env):
 
     def _retry_attacks(self, rotate: bool) -> int:
         if rotate:
-            survivors = self.np_random.binomial(
-                self.true_attacks, 1.0 - self.config.rotate_clear_probability
-            )
-            background = self.np_random.binomial(self.config.max_attack, 0.035)
-            return int(min(self.config.max_attack, survivors + background))
+            if self.config.attacker_count > 1:
+                survivors = self.compromised_mask & (
+                    self.np_random.random(self.config.max_attack)
+                    >= self.config.rotate_clear_probability
+                )
+                background = self.np_random.random(self.config.max_attack) < 0.035
+                self.compromised_mask = survivors | background
+                self.compromised = int(self.compromised_mask.sum())
+            else:
+                survivors = self.np_random.binomial(
+                    self.true_attacks, 1.0 - self.config.rotate_clear_probability
+                )
+                background = self.np_random.binomial(self.config.max_attack, 0.035)
+                self.compromised = int(min(self.config.max_attack, survivors + background))
+            # Retain the repaired state for the next round, not just this retry.
+            return self.compromised
         survivors = self.np_random.binomial(self.true_attacks, self.config.persistence)
         extra = self.np_random.binomial(
             max(0, self.config.max_attack - survivors),
@@ -442,7 +437,7 @@ class DefenseEnv(gym.Env):
             final_success = self._quorum_success(redundancy, attacks_after_recovery)
             tx_cost += self._communication_cost(redundancy)
             if recovery == "rotate":
-                rotation_cost = 0.22
+                rotation_cost = self.reward_config.rotation_cost
                 tx_cost += rotation_cost
 
         remaining_steps = max(1, self.config.horizon - self.t)
@@ -452,10 +447,17 @@ class DefenseEnv(gym.Env):
         utility = self.importance * (
             1.0 if final_success else -self.failure_penalty
         )
-        reward = utility - 0.20 * tx_cost
-        reward -= self.constraint_weight * max(0.0, tx_cost - reserve_allowance)
+        reward = utility - self.reward_config.communication_weight * tx_cost
+        if self.budget_penalty_mode == "lagrangian":
+            target_cost = self.config.budget_per_step * self.budget_scale
+            reward -= self.constraint_weight * (tx_cost - target_cost)
+        else:
+            reward -= self.constraint_weight * max(0.0, tx_cost - reserve_allowance)
         if budget_violation:
-            reward -= 0.35 + min(1.5, -self.budget_remaining * 0.05)
+            reward -= self.reward_config.budget_violation_base + min(
+                self.reward_config.budget_debt_cap,
+                -self.budget_remaining * self.reward_config.budget_debt_weight,
+            )
 
         self._episode_metrics["successes"] += float(final_success)
         self._episode_metrics["importance_total"] += self.importance
@@ -504,6 +506,7 @@ class DefenseEnv(gym.Env):
                 "success_rate": self._episode_metrics["successes"] / total,
                 "weighted_success_rate": self._episode_metrics["importance_success"] / imp_total,
                 "mean_cost": self._episode_metrics["cost"] / total,
+                "target_mean_cost": self.budget_total / total,
             }
             obs = np.zeros(self.observation_size, dtype=np.float32)
         else:

@@ -5,6 +5,14 @@ communication-layer defense implementation. The files listed immediately below
 are the earlier CPU-only experiment; the newer multi-algorithm POMDP work is
 under `rl/`.
 
+Historical results formerly stored under the misspelled `expriment/` directory
+are consolidated under `results/single_attacker/`, `results/multi_attacker/`,
+and `results/multi_attacker_pilot/`. They compare fixed, ML, and linear
+Q-learning policies; their contents are unchanged. These outputs remain
+Git-ignored and are separate from the newer `rl/` experiments. The milestone
+runner retains `expriment/` in its `git show` reference because that path names
+files in a historical commit.
+
 ## New RL experiment
 
 The dedicated `ee599-rl` environment and `experiment/rl/` package compare
