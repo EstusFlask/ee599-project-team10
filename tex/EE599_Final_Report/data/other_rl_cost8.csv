@@ -1,0 +1,5 @@
+scenario,QR-DQN,DQN,PPO
+Independent,11.8,7.6,11.6
+Waves,23.2,21.2,25.4
+Campaign,8.7,6.3,8.3
+Campaign + waves,9.8,8.7,10.3
