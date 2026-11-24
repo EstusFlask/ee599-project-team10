@@ -2,7 +2,7 @@
 
 **EE599 — Team 10**
 
-Defense against **Adversary-in-the-Middle (AiTM)** attacks on multi-agent systems.
+Defense against **Agent-in-the-Middle (AiTM)** attacks on multi-agent systems.
 AiTM threat model based on: https://arxiv.org/abs/2502.14847
 
 The communication-layer defense provides Byzantine-fault-tolerant message passing across **AutoGen**, **CAMEL**, and **MetaGPT** frameworks, with configurable topologies, datasets, and LLM backends.

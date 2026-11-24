@@ -1,6 +1,5 @@
 % USC EE599 Team 10 -- Final Project Report
 % Self-contained academic manuscript. Compile: latexmk -pdf -interaction=nonstopmode main.tex
-% Final experimental values transcribed from final(3).md (not new measurements).
 \documentclass[10pt,twocolumn]{article}
 \usepackage[letterpaper,top=0.68in,bottom=0.68in,left=0.69in,right=0.69in,columnsep=0.24in]{geometry}
 \usepackage[T1]{fontenc}
@@ -46,58 +45,53 @@
 \vspace{-0.23in}
 \begin{abstract}
 \noindent
-Messages passed between LLM agents are often treated as trustworthy, even though an attacker may change them in transit. Hash voting across redundant routes can expose such changes, but keeping redundancy high for every message is costly. We built a majority-hash communication layer and a reinforcement-learning controller that adjusts the number of routes using recent voting outcomes and delayed feedback. The two parts were tested at different levels. On 427 MBPP tasks with Qwen2.5-14B, the \emph{static} defense reduced the reported AiTM attack success rate from 100\% to 0\% at $k=3$. In separate multi-attacker \emph{simulations}, price-conditioned QR-DQN exceeded a validation-selected fixed policy by 23.2 percentage points at matched modeled cost 8 in the Waves scenario (95\% bootstrap interval: [18.6, 25.6]). The advantage was smaller, and at one high-cost operating point negative, under independent attackers. Removing delayed receipts also hurt performance substantially. Finally, 12 integration tests passed with the implemented integrity engine and simulated attacks. These results support cost-aware adaptation under our attack assumptions, not yet an end-to-end adaptive LLM deployment.
-
+Messages exchanged between LLM agents are often trusted implicitly, even though an attacker may alter them in transit. Majority hash voting across redundant routes can expose tampering, yet keeping redundancy high on every message is costly. We built a majority-hash communication layer and a reinforcement-learning controller that adapts route count from voting dissent and delayed receipts. The two parts were tested separately. Across 427 MBPP tasks with Qwen2.5-14B under a static adversary controlling one third of routes ($\alpha=0.33$), our \emph{static} defense reduced AiTM attack success from 100\% to 0\% at $k=3$. In multi-attacker \emph{simulations}, price-conditioned QR-DQN beat a validation-frozen fixed frontier by 23.2 percentage points at matched modeled cost 8 under Waves (95\% bootstrap CI: [18.6, 25.6]), but trailed fixed routing by 1.2 pp at cost 15 under independent attackers. Removing delayed receipts eliminated most adaptive gains. Twelve integration tests passed between the implemented engine and simulated attacks. These results support cost-aware adaptation under our synthetic assumptions, not yet an end-to-end adaptive LLM deployment.
 \end{abstract}
 \vspace{-0.08in}
 
 \section{Introduction}
-In frameworks such as AutoGen, CAMEL, and MetaGPT, LLM agents collaborate by exchanging instructions, intermediate results, and feedback as text \citep{wu2024autogen,li2023camel,hong2024metagpt}. Surveys of LLM-based autonomous agents also point to the central role of communication in these workflows \citep{wang2024survey,xi2023rise}. That makes the communication link itself worth protecting. An Agent-in-the-Middle (AiTM) attacker can alter one of these messages without touching the underlying models \citep{he2025aitm}. The receiving agent may then act on content that its collaborator never intended to send. Prompt-level safeguards do not, by themselves, tell the receiver whether a message was changed on the way.
+In frameworks such as AutoGen, CAMEL, and MetaGPT, LLM agents coordinate by exchanging instructions, intermediate outputs, and feedback as text \citep{wu2024autogen,li2023camel,hong2024metagpt}. Surveys of LLM agents identify communication as a core primitive in these workflows \citep{wang2024survey,xi2023rise}. An Agent-in-the-Middle (AiTM) adversary can alter messages on the link without touching the models \citep{he2025aitm}; prompt-level safeguards alone cannot verify whether a payload changed in transit.
 
-Our starting point was a fairly simple defense: send the message over several logical routes and compare hashes by majority vote. A small number of full-payload copies plus lightweight hash witnesses avoids sending the same text everywhere. The difficulty is deciding how much redundancy to buy. A large $k$ may be useful during a burst of attacks, but it is a poor default when the network is quiet. This motivated our central question: \emph{can a controller adjust redundancy from imperfect feedback and achieve better integrity success at the same average communication cost?}
+Our defense sends each message over multiple logical routes and checks integrity via strict majority hash voting. Carrying full text on at most two routes and 64-byte hash witnesses on the rest avoids replicating full payloads everywhere. The key trade-off is choosing $k$: high redundancy protects against bursts but wastes bandwidth when traffic is quiet. This motivates our question: \emph{can a controller adapt redundancy from partial, delayed feedback to improve hash-integrity success at the same average communication cost?}
 
-We investigate this with an implemented hash-voting layer, a synthetic multi-attacker environment, and a price-conditioned QR-DQN controller. We also compare learned policies with fixed routing, tuned rules, and supervised predictors rather than treating RL as the only reasonable option. There is an important boundary to the evidence: the live-LLM benchmark tests the static defense, whereas the dynamic controller is evaluated in simulation. We keep those results separate throughout the paper.
+We study this using an implemented integrity engine (with AutoGen, CAMEL, and MetaGPT adapters), a synthetic multi-attacker simulator, and a price-conditioned QR-DQN controller compared against fixed routing, a tuned rule, alternative RL methods, and supervised classifiers. The evidence boundary is explicit: the live-LLM benchmark tests the static defense, whereas dynamic controllers are evaluated only in simulation.
 
 \subsection{Related work}
-Prior studies have investigated attacks on multi-agent collaboration and debate \citep{amayuelas2024collaboration}, communication-level AiTM manipulation \citep{he2025aitm}, and agent malfunction amplification \citep{zhang2024breaking}. Work on inter-agent consistency in debates \citep{xiong2023consistency} raises a related reliability question, but our focus is specifically on whether the message arriving over a route has been altered. The majority-vote rule is related to classical Byzantine fault tolerance \citep{lamport1982byzantine}; its role in LLM multi-agent reliability has also been discussed \citep{zheng2025bft}. Here we compare hashes of one transmitted payload, not independently generated agent outputs. Moving-target defense has been explored at the network level \citep{skowyra2020mtd} and for LLM security \citep{chen2023jailbreaker}; our changing resource is the number of hash-verification routes. RL-based cyber defense has likewise addressed security expenditure versus attack loss \citep{nyberg2023defense}. We test whether past integrity feedback supports better redundancy choices than a strong fixed-cost baseline.
+Prior studies examine adversarial manipulation in multi-agent debate \citep{amayuelas2024collaboration}, communication-level AiTM attacks \citep{he2025aitm}, and malfunction amplification \citep{zhang2024breaking}. Inter-agent consistency checks \citep{xiong2023consistency} verify reasoning agreement, whereas we verify whether one transmitted payload was altered on the wire. Majority hash voting builds on Byzantine fault tolerance \citep{lamport1982byzantine}, also discussed for LLM reliability \citep{zheng2025bft}. Moving-target defense in networks \citep{skowyra2020mtd} and LLM security \citep{chen2023jailbreaker} motivated our earlier Ghost-Channel rotation (Section~\ref{sec:engine}), whereas our adaptive controller isolates redundancy scaling $k_t$. Prior RL cyber-defense work similarly balances defense expenditure against attack loss \citep{nyberg2023defense}. We test whether delayed integrity feedback outperforms a strong fixed-cost frontier.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=0.965\textwidth]{figures/architecture.pdf}
-\caption{Integrated design. A sender's message is protected by a hash-majority engine with redundancy $k$ selected by a price-conditioned controller. The attacker and closed-loop feedback are simulated in the final integration test; a live LLM is used only in the separate static experiment.}
+\caption{Integrated design. Outgoing messages pass through \texttt{DefenseEngine} at redundancy $k_t$ chosen by the price-conditioned controller. After voting, the controller receives immediate minority-vote dissent $d_{t-1}$ ($k_{t-1}\geq 3$) and a signed integrity receipt $S_{t-2}$ delayed by one extra round. Attacks and feedback are simulated in integration tests; a live LLM is used only in the separate static experiment.}
 \label{fig:architecture}
 \end{figure*}
 
 \section{Threat Model and Integrity Engine}
-\subsection{Communication-layer verification}
-We assume an attacker can modify transmissions on a subset of logical routes between two otherwise benign agents. For a message $m$ of $L$ bytes, the sender hashes the payload as $H(m)$ and chooses an odd $k\in\{1,3,\ldots,101\}$. The first two routes, when present, carry the payload and its hash; further routes send only 64-byte hash witnesses. This asymmetric design saves bytes compared with replicating the entire payload $k$ times. The receiver uses a strict majority over the received hashes. When $n_t$ routes carry the same attacker-chosen hash, the simulator marks the round successful exactly when
-
+\subsection{Communication-layer verification}\label{sec:engine}
+An adversary can modify transmissions on a subset of logical routes between two benign agents. For a message $m$ of $L$ bytes, the sender computes the SHA-256 hex digest $H(m)$ and chooses an odd $k\in\mathcal{K}=\{1,3,\ldots,101\}$ (51 levels). In \texttt{DefenseEngine}, the first $\min(k,2)$ routes carry the payload and its hash; remaining $\max(0,k-2)$ routes carry 64-byte hash witnesses. The receiver takes a strict majority over received hashes. When $n_t$ routes carry the same poisoned hash, the round succeeds in hash integrity iff
 \begin{equation}\label{eq:success}
 S_t=\mathbb{1}\big[n_t\leq(k_t-1)/2\big].
 \end{equation}
-A strict honest majority prevents the poisoned hash from winning \citep{lamport1982byzantine}. But this is a \emph{hash-integrity} result, not a delivery guarantee. Both full-payload routes could be unavailable or corrupted even while enough witnesses preserve the correct hash. Our metric therefore does not establish that an intact message reaches the receiving agent. We also do not evaluate hash collisions or attacks on the feedback channel.
+An honest majority prevents the poisoned hash from winning \citep{lamport1982byzantine}. However, Eq.~\eqref{eq:success} reflects \emph{hash integrity}, not guaranteed text delivery: both payload routes can be corrupted even while honest witnesses preserve $H(m)$ to expose tampering. Hash collisions and attacks on the receipt channel are outside our scope.
 
-The modeled bytes and normalized relative cost are
+Matching \texttt{AdaptiveDefenseEngine}, modeled bytes and relative cost are
 \begin{equation}\label{eq:cost}
-\begin{split}
-B(k,L)&=\min(k,2)L+64\max(0,k-2),\\
-c(k,L)&=B(k,L)/\max(128,2L).
-\end{split}
+B(k,L)=\min(k,2)L+64\max(0,k-2),\quad
+c(k,L)=\frac{B(k,L)}{\max(128,2L)}.
 \end{equation}
-The cost $c$ measures modeled bytes relative to a two-payload reference; it is not measured throughput or latency. The $k=1$ case keeps its single payload in the numerator. Unlike the earlier milestone prototype, the final controller cannot retry a failed transmission, and we no longer use the milestone's 164-byte incremental cost reference. This matters when reading the older results alongside the present ones.
+Here $B(k,L)$ bills payload bytes on the first $\min(k,2)$ routes plus 64-byte witnesses on additional routes (omitting hash bytes on payload routes), so $c(k,L)$ measures relative byte overhead rather than real latency or throughput. Our codebase implements \texttt{BaseDefenseAdapter} subclasses for AutoGen, CAMEL, and MetaGPT. Our milestone prototype also included FIFO Ghost-Channel rotation; here we disable rotation (\texttt{max\_ghost\_channels=0}), remove post-failure retries, and drop the milestone's 164-byte reference so gains isolate redundancy scaling $k_t$.
 
 \subsection{Dynamic synthetic adversaries}
-Real AiTM traces were not available for this evaluation. We instead use a three-stage attacker model---quiet, probing, and burst---following the hidden-state modeling approach of \citet{liao2020hmm}. Each attacker changes stage according to the \emph{chosen}, not data-fitted, transition matrix
-
+Without real AiTM traces, we simulate up to 50 channels and $0\text{--}40$ attackers (initialized at 20 during evaluation). Following \citet{liao2020hmm}, each attacker transitions across quiet, probing, and burst stages using chosen, non-fitted parameters:
 \begin{equation}\label{eq:hmm}
 P=\begin{bmatrix}.90&.09&.01\\ .10&.75&.15\\ .05&.10&.85\end{bmatrix},\quad
 p_{\rm attack}=(.02,.20,.75).
 \end{equation}
-When an attacker acts, it compromises $\min\{3,1+\operatorname{Poisson}(\mu_z)\}$ routes, with $\mu_z\in\{0,0.5,2\}$ for the three stages. We set compromise persistence to 0.72, limit concurrent compromise to 50 routes, and vary the attacker population between 0 and 40. All compromised routes use the same poisoned hash in a round. Table~\ref{tab:scenarios} shows the four conditions: independent attackers, sudden population changes, coordinated campaigns, and their combination. For Waves, the attacker count jumps with probability 0.03 each round, multiplied by one of $\{0.4,0.6,1.6,2.5\}$. Campaign uses 0.70 coupling to a shared stage. None of these numbers should be read as measured attack frequencies.
+An active attacker compromises $\min\{3,1+\operatorname{Poisson}(\mu_z)\}$ routes with $\mu_z\in\{0,0.5,2\}$. Compromise persistence is 0.72, total concurrent compromise is capped at 50, and all compromised routes emit one shared poisoned hash (worst-case collusion). Table~\ref{tab:scenarios} summarizes the four scenarios: Independent, Waves (3\% per-round population jump multiplying attacker count by $\{0.4,0.6,1.6,2.5\}$), Campaign (0.70 coupling to a shared stage), and Campaign + waves. These are controlled stress regimes, not measured attack frequencies.
 
 \begin{table}[t]
 \centering
-\caption{Final synthetic attack scenarios. Coupling and population jumps are injected by the simulator; they are not fitted attack statistics.}
+\caption{Synthetic attack scenarios. Coupling and population jumps are experimental simulator settings, not fitted attack statistics.}
 \label{tab:scenarios}
 \footnotesize
 \setlength{\tabcolsep}{3.6pt}
@@ -114,52 +108,50 @@ Campaign + waves & Shared stages and population jumps \\
 \end{table}
 
 \section{Cost-Aware Adaptive Controller}
-The controller does not know how many routes will be compromised in the current round. It sees message length $L_t\in\{50,100,200\}$, importance $w_t\in\{0.5,1,1.5\}$, the price $\lambda$, earlier voting disagreements (when $k\geq3$), and a receipt reporting the preceding round's integrity result. An estimator uses the votes and receipts to infer the earlier compromise count when possible, or a lower bound otherwise. Its 22 features include exponential moving averages with rates 0.5, 0.2, and 0.05. The hidden attacker stages, attacker count, and current compromise total remain unavailable. We assume the one-round-delayed receipt is trustworthy and has no communication charge; that is a significant simplification, examined later.
+The controller never sees attacker count, stages, or $n_t$. Message length $L_t$ follows a three-state Markov workload with base lengths $\{50,100,200\}$ bytes times $\operatorname{LogNormal}(0,0.22)$ jitter, and importance $w_t\in\{0.5,1,1.5\}$ follows a matching three-state chain. At round $t$, the controller observes normalized marginal hash cost $128/\max(128,2L_t)$, importance $w_t$, price $\lambda$, and two feedback channels: (i) immediate minority-vote dissent $d_{t-1}$ when $k_{t-1}\geq 3$; and (ii) a signed integrity receipt delayed by one extra round (\texttt{delay=1}), revealing $S_{t-2}$ at round $t$. Until round $t-1$'s receipt arrives, the estimator provisionally reads round $t-1$ as honest ($n\approx d_{t-1}$) and corrects its log once $S_{t-1}$ arrives. The 22-dimensional state combines 10 estimator features (including EMAs at rates 0.5, 0.2, and 0.05) with failure EMA, prior-round indicators, workload and pacing terms, and $\log\lambda$. Treating the delayed receipt as authentic and cost-free is a major simplification tested in our ablations.
 
-We did not ask the RL agent to choose from every possible odd $k$ directly. It has 19 actions: twelve explicit values $\{1,3,5,7,9,13,17,21,27,35,45,61\}$ and seven margins $a\in\{-1,0,0.5,1,1.5,2,3\}$ around the estimated compromise count $\hat n_t$. A margin is converted into an admissible odd $k$ through
-
+Instead of selecting from all 51 odd levels directly, QR-DQN chooses among 19 actions: twelve explicit values $\{1,3,5,7,9,13,17,21,27,35,45,61\}$ and seven margins $a\in\{-1,0,0.5,1,1.5,2,3\}$ around the fast EMA estimate $\hat n_t$ (rate 0.5):
 \begin{equation}\label{eq:action}
- k_t=\operatorname{clip}_{\mathcal K}\!\left(2\left\lceil\hat n_t+a\sqrt{\hat n_t+1}\right\rceil+1\right).
+ k_t=\operatorname{clip}_{\mathcal K}\!\left(2\left\lceil\max\!\big(\hat n_t+a\sqrt{\hat n_t+1},\,0\big)\right\rceil+1\right).
 \end{equation}
-We reward correct hash-majority outcomes, penalize failures more heavily, and charge for transmitted bytes:
-
+Per-round reward trades weighted integrity against price-scaled byte cost:
 \begin{equation}\label{eq:reward}
 r_t=w_t\big[S_t-1.65(1-S_t)\big]-\lambda c(k_t,L_t).
 \end{equation}
-The price $\lambda$ is part of the observation, so changing it at test time traces a success--cost curve without retraining for each budget. It is sampled log-uniformly from $[0.01,5]$ during training. We use QR-DQN \citep{dabney2018qrdqn} with a $64\times64$ two-hidden-layer network, 50 quantiles, discount 0.95, learning rate $3\times10^{-4}$, replay capacity 200k, batch size 256, and 600k training steps. Three training seeds (2026--2028) support the main results. Figure~\ref{fig:architecture} sketches the engine and feedback loop.
+Conditioning on $\log\lambda$ lets one trained model trace a full success--cost curve by sweeping $\lambda$ at test time. During training, $\lambda\sim\operatorname{LogUniform}[0.01,5]$. We train QR-DQN \citep{dabney2018qrdqn} with a $64\times64$ MLP, 50 quantiles, $\gamma=0.95$, learning rate $3\times10^{-4}$, 200k replay buffer, batch size 256, and 600k steps across three seeds (2026--2028). Figure~\ref{fig:architecture} diagrams the loop.
 
-\subsection{Training choices and changes since the milestone}
-The QR-DQN policy is trained primarily with Campaign + waves attacks, but we deliberately vary the environment. Campaign coupling is switched off in 35\% of training episodes and population waves in 40\%, exposing the policy to more independent-like conditions. Following 8,000 random steps, $\epsilon$-greedy exploration decreases from 1 to 0.04 over the first 30\% of the 600k-step run. We take two gradient steps every four environment steps and update the target network every 2,000 steps. The aim is for the policy to respond to signals it could actually observe, not to hidden state available only inside the simulator.
+\subsection{Training protocol and changes since the milestone}
+QR-DQN trains under Campaign + waves with domain randomization that turns off campaign coupling in 35\% of episodes and waves in 40\%, preventing degradation on stationary traffic. After 8,000 random steps, $\epsilon$ decays linearly from 1.0 to 0.04 over the first 30\% of training, with two gradient updates every four steps and target updates every 2,000 steps.
 
-Our earlier milestone used $k\in\{1,3,5,7\}$ with one possible retry. For the final study we removed retries, expanded the available redundancy levels, changed the cost definition, and used longer episodes and a different evaluation protocol. The old and new success--cost curves are not numerically interchangeable. We retain the earlier static LLM benchmark only as separate evidence for the communication defense.
+Compared with our milestone ($k\in\{1,3,5,7\}$, one retry, Ghost Channels, 1--3 attackers, linear Q-learning), the final study removes retries and channel rotation, scales to 50 channels and up to 40 attackers, adopts Eq.~\eqref{eq:cost}, and replaces per-budget retraining with price-conditioned deep RL. Milestone and final simulation curves are thus not numerically comparable; we retain only the milestone's live-LLM static benchmark as separate communication-layer evidence.
 
 \section{Experimental Protocol}
-\subsection{Evaluation and comparisons}
-Each simulated episode contains 256 messages. We evaluate on 20 held-out seeds (1000--1019) across four attack scenarios. RL controllers are evaluated at 16 prices and supervised methods at eight. Our two reported quantities are importance-weighted hash-majority success and average modeled byte cost:
-
+\subsection{Evaluation metrics and baselines}
+Each episode runs $T=256$ rounds across $E=20$ held-out test seeds (1000--1019) per scenario. We evaluate cross-episode mean importance-weighted hash success and average modeled cost:
 \begin{equation}\label{eq:metric}
-\hat p=\frac{\sum_{e,t}w_{e,t}S_{e,t}}{\sum_{e,t}w_{e,t}},\qquad \bar c=\frac{1}{N}\sum_{e,t}c(k_{e,t},L_{e,t}).
+\hat p=\frac{1}{E}\sum_{e=1}^{E}\frac{\sum_{t=1}^{T}w_{e,t}S_{e,t}}{\sum_{t=1}^{T}w_{e,t}},\qquad
+\bar c=\frac{1}{ET}\sum_{e=1}^{E}\sum_{t=1}^{T}c(k_{e,t},L_{e,t}).
 \end{equation}
-We put particular care into the fixed baseline. It can select any of the 51 odd redundancy values and randomly mix adjacent values to reach intermediate mean costs. We first determine its best success--cost frontier on validation seeds 3000--3019 and then \emph{freeze} that selection before using test seeds. This avoids choosing the best fixed policy after looking at test outcomes. Policies are compared at the same observed $\bar c$ by interpolation within measured cost ranges; we do not extrapolate. The reported gain $\Delta_\pi(c)=100[\hat p_\pi(c)-\hat p_{\rm fixed}(c)]$ is in percentage points. Pointwise 95\% intervals come from 500 bootstrap resamples of the 20 test seeds, not from repeated draws of the HMM parameters.
+Randomly mixing adjacent odd $k\in\mathcal{K}$ yields the fixed upper concave hull. To avoid selecting the baseline on test seeds, we select its upper-hull vertices on separate validation seeds (3000--3019) and \emph{freeze} that set before measuring test-seed performance. Each adaptive family's swept operating points (16 geometric prices in $[0.01,5]$ for RL, 12 train-selected parameter sets for the tuned rule, 8 prices for ML) are interpolated along their test-set upper concave hulls without extrapolation. Gain at cost $c$ is $\Delta_\pi(c)=100[\hat p_\pi(c)-\hat p_{\rm fixed}(c)]$ (pp). Pointwise 95\% intervals use 500 paired bootstrap resamples over the 20 test seeds and exclude training-seed or HMM-parameter uncertainty.
 
-Other comparisons include a six-parameter rule tuned over 150 random configurations, eight supervised models using 60k oracle-labeled samples, and DQN, PPO, A2C, and RecurrentPPO \citep{mnih2015dqn,schulman2017ppo}. Where applicable, methods have access to the same observation information. Only the primary QR-DQN experiment uses three training seeds; alternative RL methods and ablations use one seed (2026), limiting claims about algorithm rankings.
+We compare against: (1) a six-parameter estimator rule searched over 150 random configurations on seeds 100--105 (retaining 12 train-hull sets); (2) DQN \citep{mnih2015dqn}, PPO \citep{schulman2017ppo}, A2C \citep{mnih2016a3c}, and RecurrentPPO \citep{raffin2021sb3} trained for 600k steps on seed 2026 using the project's default $128\times128$ networks (120k replay buffer for DQN); and (3) eight supervised classifiers trained on 60k oracle-labeled samples (10k validation) predicting directly over all 51 odd-$k$ classes rather than the 19-action margin space. Because alternative learners and ablations use one seed (2026), single-seed tables are descriptive rather than definitive rankings.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=.975\textwidth]{figures/main_gain.pdf}
-\caption{Principal result: QR-DQN (average over three training seeds) minus the validation-selected fixed frontier at matched actual communication cost. Markers show reported percentage-point gains; whiskers are pointwise 95\% bootstrap intervals from 20 test seeds (500 resamples). Campaign + waves at cost 15 has coverage from two of three training seeds. Shown points are directly reported values, connected only as a visual guide.}
+\caption{Matched-cost gain of QR-DQN (three-seed mean) over the validation-frozen fixed frontier. Points are dodged horizontally; whiskers show pointwise 95\% bootstrap intervals over 20 test seeds (500 resamples). At Campaign + waves cost 15 (hollow marker), only two of three training seeds reached cost 15, so its 3-seed bootstrap interval is omitted to avoid coverage-selection bias.}
 \label{fig:gain}
 \end{figure*}
 
 \section{Results and Analysis}
 \subsection{Static LLM test and engine integration}
-The clearest test of the communication layer itself uses a Coder/Reviewer pair with Qwen2.5-14B. Across 427 MBPP tasks \citep{austin2021mbpp}, the reported AiTM attack success rate fell from 100\% without defense to 0\% with $k=3$, while reported system availability stayed at 100\%. This experiment involves a real LLM, but \emph{does not} test the learned controller.
+To test the communication layer with a live model, we ran a Coder/Reviewer workflow in AutoGen using Qwen2.5-14B \citep{qwen2024qwen25} on 427 MBPP tasks \citep{austin2021mbpp}. Under an AiTM adversary controlling $\alpha=0.33$ of routes (one of three at $k=3$), attack success dropped from 100\% without defense to 0\% with static $k=3$, while availability remained 100\%. This tests the static quorum defense on a live LLM, not the adaptive controller.
 
-For the final integration demo, we connected the implemented \texttt{DefenseEngine} to simulated attackers and fixed, rule-based, or QR-DQN controllers. In all 18 reported scenario--policy combinations, the engine outcome agreed with Eq.~\eqref{eq:success}; all 12 integration tests passed, including the byte-accounting and observation checks. We view this as a consistency check between code and simulator, rather than evidence for a live adaptive LLM system.
+In our closed-loop integration demo, \texttt{AdaptiveAdapter} wraps \texttt{BaseDefenseAdapter.secure\_transmit} (compatible with our AutoGen, CAMEL, and MetaGPT adapters) and connects \texttt{AdaptiveDefenseEngine} to simulated attackers and fixed, rule, or QR-DQN controllers. Across all 18 evaluated scenario--policy pairs, engine outcomes matched Eq.~\eqref{eq:success} with 100\% agreement, and all 12 unit tests passed for byte accounting and elementwise observation parity with the training simulator. This verifies code--simulator consistency rather than live adaptive LLM deployment.
 
 \begin{table}[t]
 \centering
-\caption{Observed importance-weighted success of the \emph{frozen fixed baseline} at matched costs, before subtracting it from any adaptive score. Values are fractions, not percentage-point gains.}
+\caption{Importance-weighted success of the \emph{validation-frozen fixed baseline} at matched costs (fractions, before subtracting from adaptive policies).}
 \label{tab:fixed}
 \footnotesize
 \setlength{\tabcolsep}{3.5pt}
@@ -175,14 +167,14 @@ Campaign + waves & .515 & .673 & .758 & .794\\
 \end{tabular}
 \end{table}
 
-\subsection{Where adaptation helps---and where it does not}
-The largest difference in Fig.~\ref{fig:gain} is under Waves. At modeled cost 8, QR-DQN improves on the frozen fixed frontier by \textbf{23.2 pp} (95\% CI [18.6,25.6]); even at cost 15 it retains a 16.5 pp gain [13.4,19.5]. At cost 8, the improvements in Independent, Campaign, and Campaign + waves are 9.7 [8.9,10.5], 8.1 [6.9,9.6], and 9.3 pp [7.9,10.8], respectively. Sudden changes in attacker population give recent feedback more value: a single fixed $k$ has to compromise between quiet and severe rounds.
+\subsection{Where adaptation helps, and where it does not}
+In Fig.~\ref{fig:gain}, Waves yields the largest gains: QR-DQN beats the frozen fixed frontier by \textbf{+23.2 pp} at cost 8 (95\% CI [18.6, 25.6]) and +16.5 pp [13.4, 19.5] at cost 15. At cost 8, Independent, Campaign, and Campaign + waves gain +9.7 [8.9, 10.5], +8.1 [6.9, 9.6], and +9.3 pp [7.9, 10.8]. Population jumps make recent feedback informative, whereas a fixed $k$ must compromise across quiet and severe rounds.
 
-There is also a useful counterexample. For Independent attackers at cost 15, QR-DQN is \textbf{1.2 pp below} the fixed frontier (95\% CI [--2.0,--0.4]). The fixed policy is already successful in 95.4\% of weighted rounds at that cost (Table~\ref{tab:fixed}), so there is little room left for improvement. We would not claim that RL is uniformly preferable. The tuned heuristic also performs well: in Waves at cost 15 its reported gain is 17.3 pp, slightly above QR-DQN's three-seed average of 16.5 pp. These results point to the value of \emph{adaptive feedback use}, which does not necessarily require a neural policy.
+Adaptation does not win everywhere. Under Independent attackers at cost 15, QR-DQN trails fixed routing by \textbf{1.2 pp} (95\% CI [$-2.0$, $-0.4$]): independent attackers average near a constant compromise count, so fixed routing already reaches 0.954 success (Table~\ref{tab:fixed}) with little headroom left. Comparing against the tuned rule highlights where RL helps: in Waves, Campaign, and Campaign + waves, the rule beats fixed routing by +3.6 to +17.3 pp and edges QR-DQN at Waves cost 15 (+17.3 vs.\ +16.5 pp), yet under Independent attackers at low cost it falls \emph{below} fixed routing ($-6.1$ pp at cost 4, $-2.7$ pp at cost 8) where QR-DQN gains +10.6 and +9.7 pp. Feedback drives most bursty-regime gains, while RL generalizes more reliably to stationary traffic.
 
 \begin{table}[t]
 \centering
-\caption{RL algorithm comparison at matched modeled cost 8, gain over frozen fixed baseline (pp). \emph{Single training seed 2026 for every entry}; descriptive only.}
+\caption{RL algorithm comparison at cost 8: gain over the validation-frozen fixed frontier (pp). Single seed 2026 throughout; descriptive only.}
 \label{tab:rl}
 \footnotesize
 \setlength{\tabcolsep}{4.2pt}
@@ -198,29 +190,29 @@ Campaign + waves & +9.8 & +8.7 & +10.3\\
 \end{tabular}
 \end{table}
 
-\subsection{How the pattern changes with budget}
-The four scenarios do not share one simple trend. In Independent, the gain shrinks from 10.6 pp at cost 4 to 2.3 pp at cost 12, before turning negative at cost 15. Waves stays positive at each plotted budget: 20.2, 23.2, 20.5, and 16.5 pp at costs 4, 8, 12, and 15. Campaign moves in the opposite direction, from 6.3 pp at cost 4 to 13.9 pp at cost 15. Campaign + waves increases from 7.1 to 11.9 pp between costs 4 and 12. Its reported 12.7 pp gain at cost 15 uses only two training seeds because the third seed did not reach that cost. We therefore avoid treating every plotted endpoint as equally supported. A policy that looks best at cost 8 may not be the right choice at cost 15.
+\subsection{Sensitivity across communication budgets}
+The four scenarios diverge across budgets. Independent shrinks from +10.6 pp at cost 4 to +2.3 pp at cost 12 and $-1.2$ pp at cost 15 as fixed routing saturates. Waves remains high (+20.2, +23.2, +20.5, +16.5 pp). Campaign climbs from +6.3 pp at cost 4 to +13.9 pp at cost 15 because larger budgets let the controller cover detected synchronized bursts. Campaign + waves rises from +7.1 to +11.9 pp across costs 4--12; at cost 15 its two-seed mean is +12.7 pp (seed 2026 did not reach cost 15), so we mark it hollow and omit its 3-seed bootstrap interval in Fig.~\ref{fig:gain} to avoid coverage-selection bias.
 
-\subsection{Other learners and ablation studies}
-At cost 8, QR-DQN, DQN, and PPO all outperform the fixed frontier in the single-seed comparison (Table~\ref{tab:rl}). Their numbers are close enough that we cannot rank them confidently with one training run each. A2C mostly chose a cost near 0.46 (roughly $k=1$), and RecurrentPPO remained near 1.27. Neither produced a useful price-dependent curve within 600k steps. This is a limitation of these training runs, not proof that the algorithms would fail after retuning.
+\subsection{Alternative learners and RL ablations}
+At cost 8 (Table~\ref{tab:rl}), QR-DQN, DQN, and PPO perform comparably on seed 2026. Seed 2026 QR-DQN scores +11.8 pp at Independent cost 8 versus the three-seed mean of +9.7 pp ($\approx 2$ pp seed spread), underscoring that single-seed differences cannot rank algorithms. Within 600k steps, A2C collapsed near cost 0.46 ($\approx k=1$) and RecurrentPPO stayed near cost 1.27 across all prices without learning a price-responsive curve.
 
-We also tried eight supervised predictors: Gaussian Naive Bayes, Logistic Regression, Linear SVM, Decision Tree, Random Forest, Extra Trees, Histogram Gradient Boosting, and an MLP. They learned from single-round optimal-$k$ labels computed using the simulator's true compromise count, but that count was \emph{not} supplied at deployment time. Validation accuracy ranged from about 0.31 to 0.51. At Independent cost 8, Decision Tree, Histogram Gradient Boosting, Linear SVM, and Gaussian Naive Bayes fell below fixed routing by 10.5, 16.2, 15.6, and 27.5 pp. One exception was Histogram Gradient Boosting at Waves cost 4 (+4.0 pp, CI [1.0,6.4]); it still trailed single-seed QR-DQN (+20.8 pp). Several methods did not cover certain target costs, so they cannot be compared at those points. It seems possible that single-round labels are a poor fit for the sequential, price-aware problem, but we did not run a controlled test of that explanation.
+All eight supervised classifiers (Gaussian Naive Bayes, Logistic Regression, Linear SVM, Decision Tree, Random Forest, Extra Trees, HistGradientBoosting, MLP) trailed fixed routing at nearly every comparable cost despite oracle single-round labels (validation accuracy 0.31--0.51, highest for MLP). At Independent cost 8, Decision Tree, HistGradientBoosting, Linear SVM, and Gaussian Naive Bayes fell below fixed routing by 10.5, 16.2, 15.6, and 27.5 pp. Only HistGradientBoosting at Waves cost 4 was positive (+4.0 pp, CI [1.0, 6.4]), far behind single-seed QR-DQN (+20.8 pp); Random Forest, Extra Trees, MLP, and Logistic Regression failed to span several target costs. Predicting directly over 51 odd-$k$ classes from single-round labels appears ill-suited to sequential, price-aware control, though we did not run a controlled test separating action space from objective.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/ablation.pdf}
-\caption{QR-DQN ablations at cost 8 (one training seed, 2026). Each series is the gain over the same frozen fixed baseline; no cross-seed uncertainty is available.}
+\caption{QR-DQN ablations at matched cost 8 (seed 2026): gain over the validation-frozen fixed frontier (pp). Single-seed runs carry no cross-seed error bars.}
 \label{fig:ablation}
 \end{figure}
 
-The ablations in Fig.~\ref{fig:ablation} tell us more about \emph{which information is useful} than about which network architecture wins. At cost 8, removing the one-round-delayed receipt changes the Waves gain from 23.2 to 12.9 pp, Campaign from 8.7 to 0.1 pp, and Campaign + waves from 9.8 to 2.2 pp. Hiding the estimated attack-count features leaves gains of 17.9, 3.0, and 5.0 pp in those scenarios. Using direct $k$ actions only gives 20.6, 6.2, and 8.6 pp. The receipt has a particularly large effect in these runs, but it is assumed cost-free and trustworthy, and each ablation has only one training seed.
+Figure~\ref{fig:ablation} isolates input contributions on seed 2026. At cost 8, removing delayed receipts reduces Waves gain from +23.2 to +12.9 pp (where immediate dissent $d_{t-1}$ preserves partial tracking) and collapses Campaign (+8.7 to +0.1 pp), Campaign + waves (+9.8 to +2.2 pp), and Independent (+11.8 to +0.7 pp). Masking the 10 estimator features lowers cost-8 gains by 4.8--6.0 pp (e.g., Campaign +8.7 to +3.0 pp; Independent +11.8 to +5.8 pp). Direct 51-level $k$ selection stays within 1.2--2.6 pp at cost 8, but degrades sharply at cost 15 (Independent $-0.6$ to $-6.0$ pp; Waves +16.5 to +12.1 pp). Delayed receipts carry the largest signal, explicit count estimation helps consistently, and margin actions stabilize high-budget control.
 
-\subsection{A useful check with a tuned rule}
-A non-neural rule is an important comparison here: if a small hand-designed controller makes the same choices, the contribution may be feedback rather than deep learning. The six-parameter rule ablations in Table~\ref{tab:rule} suggest exactly that. Averaged over the four scenarios at cost 12, dropping receipts changes its gain from 8.7 to 2.6 pp; dropping message length and importance changes it to 6.7 pp. Each version was re-tuned with a separate random search, so one- or two-point differences are not strong evidence on their own.
+\subsection{Rule ablations and integration check}
+Table~\ref{tab:rule} ablates the six-parameter rule by re-running the 150-candidate random search per variant against the \emph{test-seed} fixed-$k$ upper hull (unlike the validation-frozen frontier in Tables~\ref{tab:fixed}--\ref{tab:rl}). At cost 12, removing receipts drops the four-scenario mean from +8.7 to +2.6 pp, and removing message value drops it to +6.7 pp. At costs 4 and 8, several ablated variants slightly exceed the full rule (No receipt +4.8 pp and Delay 2 +3.8 pp vs.\ Full +2.4 pp at cost 4). Because each row runs an independent 150-candidate search, single-variant tuning exhibits $\pm 1\text{--}2$ pp noise; additional pace, trend, and probe ablations stayed within that band, while zero-delay search even hit $-13.5$ pp at cost 4 from poor low-cost sampling. Only the large cost-12 receipt drop and consistent message-value drop carry clear signal, echoing the RL ablation.
 
 \begin{table}[t]
 \centering
-\caption{Tuned rule ablations: gains over fixed frontier, averaged across four scenarios (pp). Separate random-search tuning for each variant.}
+\caption{Tuned-rule ablations averaged across four scenarios (pp over the \emph{test-seed} fixed-$k$ upper hull, unlike Tables~\ref{tab:fixed}--\ref{tab:rl}). Each row uses an independent 150-candidate random search.}
 \label{tab:rule}
 \footnotesize
 \setlength{\tabcolsep}{4.2pt}
@@ -236,22 +228,22 @@ Receipt delay 2 rounds & +3.8 & +5.1 & +7.8\\
 \end{tabular}
 \end{table}
 
-One integration example puts these comparisons in perspective. In Campaign + waves, fixed $k=33$ achieved mean cost 11.7 and success 0.724, QR-DQN at price 0.05 achieved 12.6 and 0.876, and the tuned rule achieved 12.2 and 0.832. These are \emph{not matched costs}; the demo used only six seeds and a few fixed choices. We include it to show the real engine and controller can run together, not as an additional claim that QR-DQN wins a fair performance comparison.
+As an illustrative end-to-end check in the integration demo (six seeds 1000--1005, Campaign + waves), fixed $k=33$ reached cost 11.7 and success 0.724, QR-DQN ($\lambda=0.05$) reached 12.6 and 0.876, and tuned rule \#11 reached 12.2 and 0.832. These non-matched-cost runs serve only to confirm closed-loop execution with \texttt{DefenseEngine}.
 
 \section{Limitations and Future Work}
-\textbf{The attacker model is synthetic.} Its HMM transitions, population jumps, shared stages, and compromise limits were selected for experiments rather than estimated from attacks in the wild. The attacker also does not learn against the defender. Results could change with a different transition matrix or a strategic adversary. Parameter sweeps and trace-informed tests are needed before extrapolating beyond these four scenarios.
+\textbf{Synthetic adversary assumptions.} All HMM transitions, jump rates, couplings, and caps were chosen experimentally rather than fitted to real AiTM logs, and attackers do not adapt to the defender. Results could shift under strategic adversaries or different temporal patterns.
 
-\textbf{Hash agreement is not message delivery.} We count a correct winning hash, even if no intact full payload is available to the agent. We do not measure downstream task success or denial-of-service behavior in the dynamic runs. The sender's reference hash and the receipt channel are trusted in the simulator; in reality a secure receipt needs bandwidth, authentication, and error handling. Since removing receipts had such a large effect, that deployment cost should be measured rather than ignored.
+\textbf{Hash integrity versus delivery and receipt cost.} Equation~\eqref{eq:success} verifies hash agreement rather than intact payload delivery, and dynamic runs omit downstream task accuracy and denial-of-service behavior. Moreover, receipts are modeled as authentic and free of bandwidth overhead; because removing receipts erases most adaptive gains, measuring and authenticating receipt traffic is critical.
 
-\textbf{The evidence is still limited.} The static MBPP test uses live LLM agents, but the adaptive closed loop has only been exercised with simulated attackers. The main QR-DQN comparison averages three training seeds; other methods and ablations have one. The bootstrap intervals resample 20 test seeds and omit variability from training and the attack-model assumptions. We cannot infer real-world reliability from those intervals alone.
+\textbf{Scope of evidence.} The live-LLM MBPP test covers only static routing ($k=3$), whereas adaptive control was tested solely in simulation. Only QR-DQN averages three training seeds; alternative algorithms and ablations use one seed, and 20-seed bootstrap intervals exclude training and model-specification variance.
 
 \subsection{Next experiment: closing the loop with live agents}
-A natural next step is to run the learned controller in the same live Coder/Reviewer workflow used for the static defense, but with attacks changing over time. We would measure not only hash-majority correctness, but also whether the receiver actually obtains an intact message, whether poisoned instructions alter the task outcome, and how much the extra routes and receipts cost in real bytes and latency. A malicious network may delay, replay, or suppress feedback, so receipt authentication and failure behavior should be part of that test. Fixed, tuned-rule, and learned policies should then be compared at the same \emph{measured} communication budget. We would also repeat training with more seeds and test additional models and workloads.
+The next step is deploying the adaptive controller inside our live AutoGen, CAMEL, and MetaGPT workflows under time-varying attacks. That study should measure intact payload delivery, downstream task success, and wire bytes and latency, including authenticated receipt overhead and resilience to delayed, replayed, or dropped receipts. Fixed, tuned-rule, and learned controllers should then be compared at matched \emph{measured} network budgets across more training seeds and LLM backbones.
 
 \section{Conclusion}
-Our experiments suggest that redundancy is worth adapting when attacks have recognizable changes over time. We implemented a lightweight majority-hash layer, tested its static protection on 427 live-LLM coding tasks, and evaluated adaptive route selection in a separate multi-attacker simulator. QR-DQN gained as much as 23.2 pp over the frozen fixed baseline under Waves, but did not win everywhere. The receipt ablations and tuned-rule results point to useful feedback as a key ingredient. What remains open is whether that advantage survives real agent workflows, imperfect receipts, and measured network costs.
+Adapting hash-voting redundancy pays off when attack intensity varies over time. We built a majority-hash layer with multi-framework adapters, validated static protection on 427 live-LLM coding tasks (100\% to 0\% ASR at $k=3$, $\alpha=0.33$), and evaluated price-conditioned adaptive controllers in simulation. QR-DQN beat the validation-frozen fixed frontier by up to +23.2 pp under Waves, generalized better than a tuned rule on stationary traffic, yet trailed fixed routing by 1.2 pp at high cost under independent attackers. Both RL and rule ablations identify integrity receipts as the main driver of adaptive gain. Testing whether these gains survive live agent workflows, authenticated receipt overhead, and measured network costs remains open work.
 
-\noindent\textbf{Team contributions.} Ruiteng Li developed the communication-layer verification and integration; Shi He developed attack modeling and adaptive controllers; Congkang Lyu led matched-cost evaluation, uncertainty analysis, and visualizations. All three contributed to the report.
+\noindent\textbf{Team contributions.} Ruiteng Li developed communication-layer verification and framework integration; Shi He developed attack modeling and adaptive controllers; Congkang Lyu led matched-cost evaluation, uncertainty analysis, and visualizations. All three contributed to the report.
 
 % The instructor excludes references from the six-page body limit.
 % Force bibliography onto a new page so the body-page count is directly auditable.

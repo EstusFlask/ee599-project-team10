@@ -47,6 +47,14 @@ def hull_vertices(points: dict) -> set:
     return {key for key, value in means.items() if value in hull}
 
 
+def _nanmean_axis0(arr: np.ndarray) -> np.ndarray:
+    """Column-wise mean ignoring NaN without RuntimeWarning on all-NaN columns."""
+    valid = ~np.isnan(arr)
+    count = valid.sum(axis=0)
+    total = np.where(valid, arr, 0.0).sum(axis=0)
+    return np.where(count > 0, total / np.maximum(count, 1), np.nan)
+
+
 def hull_curve(points: dict, keys, index) -> list:
     return upper_hull([
         (points[key][2][index].mean(), points[key][3][index].mean()) for key in keys
@@ -101,14 +109,21 @@ def main() -> None:
             values = np.asarray([d[name] for d in draws], dtype=float)
             return values
 
-        rl_draws = np.stack([summarize(f) for f in rl_families]).mean(axis=0) if rl_families else None
-        rl_observed = np.nanmean([observed[f] for f in rl_families], axis=0) if rl_families else None
+        rl_draws = (
+            _nanmean_axis0(np.stack([summarize(f) for f in rl_families]))
+            if rl_families else None
+        )
+        rl_observed = (
+            _nanmean_axis0(np.asarray([observed[f] for f in rl_families], dtype=float))
+            if rl_families else None
+        )
         for i, cost in enumerate(COST_GRID):
             row = {"scenario": scenario, "cost": cost, "fixed_success": observed["fixed"][i],
                    "rule_gap": observed["rule"][i] if "rule" in observed else float("nan")}
             if rl_families:
                 column = rl_draws[:, i]
                 column = column[~np.isnan(column)]
+                seeds_covered = int(sum(not np.isnan(observed[f][i]) for f in rl_families))
                 row.update({
                     "rl_gap": rl_observed[i],
                     "rl_ci_low": np.percentile(column, 2.5) if len(column) else float("nan"),
@@ -116,6 +131,7 @@ def main() -> None:
                     "rl_prob_better": float((column > 0).mean()) if len(column) else float("nan"),
                     "rl_seeds_positive": int(sum(observed[f][i] > 0 for f in rl_families
                                                  if not np.isnan(observed[f][i]))),
+                    "rl_seeds_covered": seeds_covered,
                     "rl_seeds": len(rl_families),
                 })
             for family in rl_families:  # per-training-seed gaps (used for same-seed ablations)
